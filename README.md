@@ -12,6 +12,8 @@ A robust desktop application for organizing and cataloging your photography coll
 - **🖱️ Drag & Drop**: Easy photo import by dragging files into the application
 - **💾 Cross-Platform Database**: SQLite database with OS-specific storage locations
 - **🔄 Orientation Correction**: Automatic image rotation based on EXIF orientation data
+- **📱 HEIC Support**: Modern iPhone/iPad HEIC format support with optional dependency
+- **👆 Quick Access**: Double-click photos to open in your default image viewer
 
 ## 📋 Requirements
 
@@ -19,6 +21,7 @@ A robust desktop application for organizing and cataloging your photography coll
 - PySide6 (Qt6 for Python)
 - Pillow (Python Imaging Library)
 - exifread
+- pillow-heif (optional, for HEIC/HEIF support)
 
 ## 🛠️ Installation
 
@@ -28,12 +31,17 @@ A robust desktop application for organizing and cataloging your photography coll
    cd photo-sphere
    ```
 
-2. **Install dependencies:**
+2. **Install basic dependencies:**
    ```bash
    pip install PySide6 Pillow exifread
    ```
 
-3. **Run the application:**
+3. **Install HEIC support (optional but recommended):**
+   ```bash
+   pip install pillow-heif
+   ```
+
+4. **Run the application:**
    ```bash
    python photosphere.py
    ```
@@ -53,9 +61,26 @@ source photosphere-env/bin/activate
 # Install dependencies
 pip install PySide6 Pillow exifread
 
+# Install HEIC support (optional)
+pip install pillow-heif
+
 # Run application
 python photosphere.py
 ```
+
+### HEIC/HEIF Support
+
+PhotoSphere supports modern HEIC and HEIF image formats used by Apple devices (iPhone, iPad) and some Android phones. This support requires the optional `pillow-heif` library.
+
+**To enable HEIC support:**
+1. Install pillow-heif: `pip install pillow-heif`
+2. Restart PhotoSphere
+
+**Without HEIC support:**
+- HEIC files can still be imported and cataloged
+- Placeholder thumbnails will be shown
+- All metadata except image dimensions will be extracted
+- Double-click still opens files in your default viewer
 
 ## 🎯 Usage
 
@@ -69,15 +94,23 @@ python photosphere.py
 
 ### Supported File Formats
 
+**Standard Formats:**
 - JPEG (.jpg, .jpeg)
 - PNG (.png)
-- TIFF (.tiff)
+- TIFF (.tiff, .tif)
 - BMP (.bmp)
 - GIF (.gif)
 
+**Modern Formats (with optional pillow-heif):**
+- HEIC (.heic) - Apple's High Efficiency Image Container
+- HEIF (.heif) - High Efficiency Image Format
+
+> **Note:** HEIC/HEIF support requires installing `pillow-heif`. Without it, HEIC files can still be imported but will show placeholder thumbnails.
+
 ### Viewing Photo Details
 
-- Click on any photo in the grid to view its details
+- **Single-click** on any photo in the grid to view its details
+- **Double-click** on any photo to open it in your system's default image viewer
 - Photo details include:
   - Camera make and model
   - Lens information
@@ -86,6 +119,13 @@ python photosphere.py
   - File size and dimensions
   - GPS coordinates (if available)
   - Google Maps integration for location data
+
+### Working with HEIC Files
+
+- **With HEIC support enabled**: Full thumbnails, previews, and metadata extraction
+- **Without HEIC support**: Files are cataloged with placeholder thumbnails and basic metadata
+- **Double-click**: Opens HEIC files in your default viewer regardless of PhotoSphere's HEIC support
+- **Status indicator**: Check the status bar to see if HEIC support is enabled
 
 ### Database Management
 
@@ -149,9 +189,15 @@ PhotoSphere extracts comprehensive metadata from photos including:
 ### Image Handling
 
 - Proper EXIF orientation handling for correct image display
-- Efficient thumbnail generation
-- Support for various image formats
+- Efficient thumbnail generation for all supported formats
+- HEIC/HEIF format support with automatic conversion for display
 - Graceful handling of corrupted or unsupported files
+- Placeholder generation for unsupported formats
+- Cross-platform file opening in default image viewers
+
+## 📸 Screenshots
+
+*Add screenshots of your application here*
 
 ## 🚧 Development
 
@@ -162,6 +208,15 @@ photo-sphere/
 ├── photosphere.py          # Main application file
 ├── README.md              # This file
 └── requirements.txt       # Python dependencies (optional)
+```
+
+### requirements.txt (suggested content)
+
+```
+PySide6>=6.0.0
+Pillow>=8.0.0
+exifread>=2.3.0
+pillow-heif>=0.10.0  # Optional: for HEIC/HEIF support
 ```
 
 ### Key Classes
@@ -193,6 +248,52 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - GPS extraction may not work with all camera models
 - Very large photo collections may experience slower performance
 - Some EXIF data might not be extracted from certain camera manufacturers
+- HEIC files require the optional `pillow-heif` library for full support
+- HEIC thumbnail generation may be slower than standard formats
+
+## 🔮 Future Enhancements
+
+- [ ] Batch photo operations
+- [ ] Advanced search and filtering
+- [ ] Photo rating system
+- [ ] Export functionality
+- [ ] Duplicate photo detection
+- [ ] Photo editing integration
+- [ ] Cloud storage integration
+- [ ] RAW format support
+- [ ] Video file support
+- [ ] Advanced HEIC metadata extraction
+
+## 🔧 Troubleshooting
+
+### HEIC Files Not Displaying
+
+If HEIC files show as gray placeholders:
+
+1. **Check HEIC support status**: Look at the status bar or About dialog
+2. **Install pillow-heif**: Run `pip install pillow-heif`
+3. **Restart PhotoSphere**: Close and reopen the application
+4. **Verify installation**: You should see "HEIC/HEIF support enabled" in the console
+
+### Performance Issues
+
+- Large collections: Consider importing photos in smaller batches
+- Slow HEIC thumbnails: This is normal due to format conversion
+- Memory usage: Restart the application if importing many large files
+
+### Database Issues
+
+- **Backup regularly**: Copy the database file from the application data directory
+- **Location**: Use File → Database Information to find your database
+- **Corruption**: Delete the database file to start fresh (imports will be lost)
+
+## 📞 Support
+
+If you encounter any issues or have questions:
+
+1. Check the [Issues](https://github.com/jackworthen/photo-sphere/issues) page
+2. Create a new issue if your problem isn't already reported
+3. Provide detailed information about your system and the issue
 
 ---
 
