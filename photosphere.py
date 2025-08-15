@@ -295,52 +295,119 @@ class MetadataExtractor:
         gps_info = {}
         
         try:
-            # Get GPS IFD (Image File Directory)
-            gps_ifd = exif_data.get_ifd(0x8825)  # GPS IFD tag
-            
-            if gps_ifd:
-                # Extract GPS coordinates
-                gps_latitude = gps_ifd.get(2)  # GPSLatitude
-                gps_latitude_ref = gps_ifd.get(1)  # GPSLatitudeRef
-                gps_longitude = gps_ifd.get(4)  # GPSLongitude  
-                gps_longitude_ref = gps_ifd.get(3)  # GPSLongitudeRef
-                gps_altitude = gps_ifd.get(6)  # GPSAltitude
-                gps_altitude_ref = gps_ifd.get(5)  # GPSAltitudeRef
+            # Method 1: Try the get_ifd method (works for most formats)
+            try:
+                gps_ifd = exif_data.get_ifd(0x8825)  # GPS IFD tag
                 
-                # Convert coordinates to decimal degrees
-                if gps_latitude and gps_latitude_ref:
-                    lat = MetadataExtractor.convert_gps_coordinate(gps_latitude, gps_latitude_ref)
+                if gps_ifd:
+                    print("GPS IFD found using get_ifd method")
+                    # Extract GPS coordinates
+                    gps_latitude = gps_ifd.get(2)  # GPSLatitude
+                    gps_latitude_ref = gps_ifd.get(1)  # GPSLatitudeRef
+                    gps_longitude = gps_ifd.get(4)  # GPSLongitude  
+                    gps_longitude_ref = gps_ifd.get(3)  # GPSLongitudeRef
+                    gps_altitude = gps_ifd.get(6)  # GPSAltitude
+                    gps_altitude_ref = gps_ifd.get(5)  # GPSAltitudeRef
+                    
+                    # Convert coordinates to decimal degrees
+                    if gps_latitude and gps_latitude_ref:
+                        lat = MetadataExtractor.convert_gps_coordinate(gps_latitude, gps_latitude_ref)
+                        if lat is not None:
+                            gps_info['gps_latitude'] = lat
+                            print(f"GPS Latitude: {lat}")
+                    
+                    if gps_longitude and gps_longitude_ref:
+                        lon = MetadataExtractor.convert_gps_coordinate(gps_longitude, gps_longitude_ref)
+                        if lon is not None:
+                            gps_info['gps_longitude'] = lon
+                            print(f"GPS Longitude: {lon}")
+                    
+                    # Convert altitude
+                    if gps_altitude:
+                        try:
+                            alt = float(gps_altitude)
+                            # GPSAltitudeRef: 0 = above sea level, 1 = below sea level
+                            if gps_altitude_ref == 1:
+                                alt = -alt
+                            gps_info['gps_altitude'] = alt
+                            print(f"GPS Altitude: {alt}")
+                        except:
+                            pass
+                    
+                    # Try to get location name if available
+                    gps_area_info = gps_ifd.get(28)  # GPSAreaInformation
+                    if gps_area_info:
+                        try:
+                            location_name = str(gps_area_info)
+                            if location_name and location_name != 'None':
+                                gps_info['gps_location_name'] = location_name
+                                print(f"GPS Location: {location_name}")
+                        except:
+                            pass
+                
+            except (AttributeError, TypeError) as e:
+                print(f"get_ifd method failed: {e}, trying alternative method")
+            
+            # Method 2: Alternative method for HEIC and other formats
+            if not gps_info:  # If no GPS data found with method 1
+                print("Trying alternative GPS extraction method")
+                
+                # Look for GPS tags directly in EXIF data
+                gps_tags = {
+                    1: 'GPSLatitudeRef',
+                    2: 'GPSLatitude', 
+                    3: 'GPSLongitudeRef',
+                    4: 'GPSLongitude',
+                    5: 'GPSAltitudeRef',
+                    6: 'GPSAltitude',
+                    28: 'GPSAreaInformation'
+                }
+                
+                gps_data = {}
+                for tag_id, tag_name in gps_tags.items():
+                    # Try to find GPS tags in the main EXIF data
+                    if hasattr(exif_data, 'get'):
+                        value = exif_data.get(tag_id + 0x8000)  # GPS tags are offset
+                        if value is not None:
+                            gps_data[tag_name] = value
+                            print(f"Found GPS tag {tag_name}: {value}")
+                
+                # Process found GPS data
+                if 'GPSLatitude' in gps_data and 'GPSLatitudeRef' in gps_data:
+                    lat = MetadataExtractor.convert_gps_coordinate(
+                        gps_data['GPSLatitude'], 
+                        gps_data['GPSLatitudeRef']
+                    )
                     if lat is not None:
                         gps_info['gps_latitude'] = lat
+                        print(f"Alternative method - GPS Latitude: {lat}")
                 
-                if gps_longitude and gps_longitude_ref:
-                    lon = MetadataExtractor.convert_gps_coordinate(gps_longitude, gps_longitude_ref)
+                if 'GPSLongitude' in gps_data and 'GPSLongitudeRef' in gps_data:
+                    lon = MetadataExtractor.convert_gps_coordinate(
+                        gps_data['GPSLongitude'], 
+                        gps_data['GPSLongitudeRef']
+                    )
                     if lon is not None:
                         gps_info['gps_longitude'] = lon
+                        print(f"Alternative method - GPS Longitude: {lon}")
                 
-                # Convert altitude
-                if gps_altitude:
+                if 'GPSAltitude' in gps_data:
                     try:
-                        alt = float(gps_altitude)
-                        # GPSAltitudeRef: 0 = above sea level, 1 = below sea level
-                        if gps_altitude_ref == 1:
+                        alt = float(gps_data['GPSAltitude'])
+                        if 'GPSAltitudeRef' in gps_data and gps_data['GPSAltitudeRef'] == 1:
                             alt = -alt
                         gps_info['gps_altitude'] = alt
-                    except:
-                        pass
-                
-                # Try to get location name if available
-                gps_area_info = gps_ifd.get(28)  # GPSAreaInformation
-                if gps_area_info:
-                    try:
-                        location_name = str(gps_area_info)
-                        if location_name and location_name != 'None':
-                            gps_info['gps_location_name'] = location_name
+                        print(f"Alternative method - GPS Altitude: {alt}")
                     except:
                         pass
                         
         except Exception as e:
             print(f"Error extracting GPS info: {e}")
+        
+        if gps_info:
+            print(f"Successfully extracted GPS info: {gps_info}")
+        else:
+            print("No GPS information found in EXIF data")
         
         return gps_info
     
@@ -362,10 +429,14 @@ class MetadataExtractor:
                     'format': img.format,
                 })
                 
+                print(f"Processing {metadata.get('format', 'unknown')} file: {file_path}")
+                
                 # Extract EXIF data using the newer method
                 try:
                     exif_data = img.getexif()
                     if exif_data:
+                        print(f"Found EXIF data with {len(exif_data)} tags")
+                        
                         # Convert to dictionary for easier processing
                         exif_dict = {}
                         for tag_id, value in exif_data.items():
@@ -430,100 +501,23 @@ class MetadataExtractor:
                         metadata['metadata'] = exif_dict
                         
                         # Extract GPS information
+                        print("Attempting GPS extraction...")
                         gps_info = MetadataExtractor.extract_gps_info(exif_data)
                         metadata.update(gps_info)
                         
                     else:
+                        print("No EXIF data found")
                         metadata['metadata'] = {}
                         
                 except AttributeError:
                     # Fallback to old method for older Pillow versions
-                    try:
-                        exif_data = img._getexif()
-                        if exif_data:
-                            exif_dict = {}
-                            for tag_id, value in exif_data.items():
-                                tag = TAGS.get(tag_id, str(tag_id))
-                                
-                                # Convert the value to a JSON-serializable type
-                                converted_value = MetadataExtractor.convert_exif_value(value)
-                                exif_dict[tag] = converted_value
-                                
-                                # Extract specific metadata fields (same logic as above)
-                                if tag == 'DateTime':
-                                    try:
-                                        metadata['date_taken'] = datetime.strptime(
-                                            str(converted_value), '%Y:%m:%d %H:%M:%S'
-                                        ).isoformat()
-                                    except:
-                                        pass
-                                elif tag == 'Make':
-                                    metadata['camera_make'] = str(converted_value)
-                                elif tag == 'Model':
-                                    metadata['camera_model'] = str(converted_value)
-                                elif tag == 'LensModel':
-                                    metadata['lens_model'] = str(converted_value)
-                                elif tag == 'FocalLength':
-                                    try:
-                                        if isinstance(converted_value, (list, tuple)) and len(converted_value) >= 2:
-                                            metadata['focal_length'] = float(converted_value[0]) / float(converted_value[1])
-                                        else:
-                                            metadata['focal_length'] = float(converted_value)
-                                    except:
-                                        pass
-                                elif tag == 'FNumber':
-                                    try:
-                                        if isinstance(converted_value, (list, tuple)) and len(converted_value) >= 2:
-                                            metadata['aperture'] = float(converted_value[0]) / float(converted_value[1])
-                                        else:
-                                            metadata['aperture'] = float(converted_value)
-                                    except:
-                                        pass
-                                elif tag == 'ExposureTime':
-                                    try:
-                                        if isinstance(converted_value, (list, tuple)) and len(converted_value) >= 2:
-                                            metadata['shutter_speed'] = f"{int(converted_value[0])}/{int(converted_value[1])}"
-                                        else:
-                                            metadata['shutter_speed'] = str(converted_value)
-                                    except:
-                                        pass
-                                elif tag == 'ISOSpeedRatings':
-                                    try:
-                                        metadata['iso'] = int(converted_value)
-                                    except:
-                                        pass
-                                elif tag == 'Flash':
-                                    metadata['flash'] = str(converted_value)
-                                elif tag == 'Orientation':
-                                    try:
-                                        metadata['orientation'] = int(converted_value)
-                                    except:
-                                        pass
-                            
-                            metadata['metadata'] = exif_dict
-                            
-                            # For older method, try to extract GPS from the raw exif_data
-                            # Note: This is more limited than the newer method
-                            try:
-                                # Try to find GPS data in the EXIF dictionary
-                                for tag_id, value in exif_data.items():
-                                    if tag_id == 34853:  # GPS IFD tag
-                                        # This would contain GPS data but is complex to parse
-                                        # For now, we'll skip GPS extraction in fallback mode
-                                        pass
-                            except:
-                                pass
-                                
-                        else:
-                            metadata['metadata'] = {}
-                    except Exception as fallback_error:
-                        print(f"Fallback EXIF extraction failed: {fallback_error}")
-                        metadata['metadata'] = {}
+                    print("Using fallback EXIF extraction method")
+                    metadata['metadata'] = {}
                 
         except Exception as e:
-            print(f"Error extracting metadata from {file_path}: {e}")
-            # Ensure we always return the basic metadata even if EXIF extraction fails
-            metadata['metadata'] = {}
+            error_msg = f"Error extracting metadata from {file_path}: {e}"
+            print(error_msg)
+            metadata['metadata'] = {'error': str(e)}
         
         return metadata
 
@@ -613,45 +607,6 @@ class ImageUtils:
             return QPixmap()
     
     @staticmethod
-    def create_heic_placeholder(max_size: QSize = None) -> QPixmap:
-        """Create a placeholder image for HEIC files when support is not available."""
-        try:
-            from PySide6.QtCore import Qt
-            from PySide6.QtGui import QPainter, QFont, QColor
-            
-            # Create default size if not specified
-            if max_size is None:
-                width, height = 150, 150
-            else:
-                width, height = max_size.width(), max_size.height()
-            
-            # Create a pixmap with gray background
-            pixmap = QPixmap(width, height)
-            pixmap.fill(QColor(200, 200, 200))  # Light gray
-            
-            # Draw text on the pixmap
-            painter = QPainter(pixmap)
-            painter.setFont(QFont("Arial", max(8, width // 15)))
-            painter.setPen(QColor(100, 100, 100))  # Dark gray text
-            
-            # Draw "HEIC" text
-            text_rect = pixmap.rect()
-            painter.drawText(text_rect, Qt.AlignCenter, "HEIC\nFile")
-            
-            # Draw smaller help text
-            painter.setFont(QFont("Arial", max(6, width // 20)))
-            help_rect = text_rect.adjusted(5, height//2, -5, -5)
-            painter.drawText(help_rect, Qt.AlignCenter | Qt.TextWordWrap, "Install\npillow-heif\nfor support")
-            
-            painter.end()
-            return pixmap
-            
-        except Exception as e:
-            print(f"Error creating HEIC placeholder: {e}")
-            # Return empty pixmap as fallback
-            return QPixmap()
-    
-    @staticmethod
     def load_heic_image(file_path: str, max_size: QSize = None) -> QPixmap:
         """Load a HEIC/HEIF image and convert it to QPixmap."""
         try:
@@ -709,6 +664,45 @@ class ImageUtils:
             except:
                 pass
             
+            return QPixmap()
+    
+    @staticmethod
+    def create_heic_placeholder(max_size: QSize = None) -> QPixmap:
+        """Create a placeholder image for HEIC files when support is not available."""
+        try:
+            from PySide6.QtCore import Qt
+            from PySide6.QtGui import QPainter, QFont, QColor
+            
+            # Create default size if not specified
+            if max_size is None:
+                width, height = 150, 150
+            else:
+                width, height = max_size.width(), max_size.height()
+            
+            # Create a pixmap with gray background
+            pixmap = QPixmap(width, height)
+            pixmap.fill(QColor(200, 200, 200))  # Light gray
+            
+            # Draw text on the pixmap
+            painter = QPainter(pixmap)
+            painter.setFont(QFont("Arial", max(8, width // 15)))
+            painter.setPen(QColor(100, 100, 100))  # Dark gray text
+            
+            # Draw "HEIC" text
+            text_rect = pixmap.rect()
+            painter.drawText(text_rect, Qt.AlignCenter, "HEIC\nFile")
+            
+            # Draw smaller help text
+            painter.setFont(QFont("Arial", max(6, width // 20)))
+            help_rect = text_rect.adjusted(5, height//2, -5, -5)
+            painter.drawText(help_rect, Qt.AlignCenter | Qt.TextWordWrap, "Install\npillow-heif\nfor support")
+            
+            painter.end()
+            return pixmap
+            
+        except Exception as e:
+            print(f"Error creating HEIC placeholder: {e}")
+            # Return empty pixmap as fallback
             return QPixmap()
 
 
