@@ -623,6 +623,7 @@ class PhotoListWidget(QListWidget):
     """Custom list widget for displaying photos with drag and drop support."""
     
     photo_delete_requested = Signal(int)  # Signal emitted when photo deletion is requested
+    photo_open_requested = Signal(str)    # Signal emitted when photo should be opened in default viewer
     
     def __init__(self):
         super().__init__()
@@ -634,6 +635,7 @@ class PhotoListWidget(QListWidget):
         self.setViewMode(QListWidget.IconMode)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
+        self.itemDoubleClicked.connect(self.on_item_double_clicked)
     
     def show_context_menu(self, position: QPoint):
         """Show context menu for photo operations."""
@@ -647,11 +649,23 @@ class PhotoListWidget(QListWidget):
         
         menu = QMenu(self)
         
+        open_action = QAction("Open in Default Viewer", self)
+        open_action.triggered.connect(lambda: self.photo_open_requested.emit(photo_data['filepath']))
+        menu.addAction(open_action)
+        
+        menu.addSeparator()
+        
         delete_action = QAction("Delete Photo", self)
         delete_action.triggered.connect(lambda: self.photo_delete_requested.emit(photo_data['id']))
         menu.addAction(delete_action)
         
         menu.exec(self.mapToGlobal(position))
+    
+    def on_item_double_clicked(self, item: QListWidgetItem):
+        """Handle double-click on photo items."""
+        photo_data = item.data(Qt.UserRole)
+        if photo_data and photo_data.get('filepath'):
+            self.photo_open_requested.emit(photo_data['filepath'])
     
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls():
@@ -832,6 +846,7 @@ class PhotoSphereMainWindow(QMainWindow):
         self.photo_list = PhotoListWidget()
         self.photo_list.itemClicked.connect(self.on_photo_selected)
         self.photo_list.photo_delete_requested.connect(self.delete_photo)
+        self.photo_list.photo_open_requested.connect(self.open_photo_in_default_viewer)
         layout.addWidget(self.photo_list)
         
         return panel
@@ -944,6 +959,7 @@ class PhotoSphereMainWindow(QMainWindow):
         <li>Cross-platform database storage</li>
         <li>Drag & drop photo import</li>
         <li>Photo preview with proper orientation handling</li>
+        <li>Double-click to open photos in default viewer</li>
         </ul>
         
         <p><b>Requirements:</b></p>
@@ -1150,6 +1166,44 @@ class PhotoSphereMainWindow(QMainWindow):
         
         except Exception as e:
             QMessageBox.critical(self, "Error", f"An error occurred while deleting the photo: {str(e)}")
+    
+    def open_photo_in_default_viewer(self, file_path: str):
+        """Open a photo in the system's default image viewer."""
+        import subprocess
+        import sys
+        
+        # Check if file exists
+        if not os.path.exists(file_path):
+            QMessageBox.warning(
+                self,
+                "File Not Found",
+                f"The photo file could not be found:\n{file_path}\n\n"
+                "The file may have been moved or deleted."
+            )
+            return
+        
+        try:
+            if sys.platform == "win32":
+                # Windows
+                os.startfile(file_path)
+            elif sys.platform == "darwin":
+                # macOS
+                subprocess.run(["open", file_path])
+            else:
+                # Linux and other Unix-like systems
+                subprocess.run(["xdg-open", file_path])
+            
+            self.status_bar.showMessage(f"Opened: {os.path.basename(file_path)}", 2000)
+            
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Error Opening Photo",
+                f"Could not open the photo in the default viewer.\n\n"
+                f"File: {file_path}\n"
+                f"Error: {str(e)}\n\n"
+                "Please check that you have an image viewer installed."
+            )
     
     def import_photos_dialog(self):
         """Open file dialog to select photos for import."""
