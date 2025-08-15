@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 PhotoSphere Application
 A robust application for organizing and cataloging photography with metadata extraction,
