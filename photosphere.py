@@ -1,7 +1,6 @@
 """
-PhotoSphere Application
-A robust application for organizing and cataloging photography with metadata extraction,
-tagging, categorization, and search capabilities.
+PhotoSphere Application - Simplified Version
+A robust application for organizing and cataloging photography with metadata extraction.
 
 Requirements:
 pip install PySide6 Pillow exifread
@@ -19,14 +18,14 @@ from typing import List, Dict, Optional, Tuple
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QTreeWidget, QTreeWidgetItem, QListWidget, QListWidgetItem,
-    QLabel, QLineEdit, QPushButton, QTextEdit, QScrollArea, QFrame,
-    QDialog, QDialogButtonBox, QFormLayout, QComboBox, QMessageBox,
-    QProgressBar, QStatusBar, QMenuBar, QMenu, QFileDialog, QTabWidget,
-    QGroupBox, QCheckBox, QSpinBox, QDateEdit, QTableWidget, QTableWidgetItem,
+    QSplitter, QListWidget, QListWidgetItem,
+    QLabel, QPushButton, QScrollArea, QFrame,
+    QDialog, QDialogButtonBox, QFormLayout, QMessageBox,
+    QProgressBar, QStatusBar, QMenuBar, QMenu, QFileDialog,
+    QGroupBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView
 )
-from PySide6.QtCore import Qt, QThread, Signal, QSize, QDate, QTimer, QPoint
+from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QPoint
 from PySide6.QtGui import QPixmap, QIcon, QDragEnterEvent, QDropEvent, QAction, QTransform
 
 from PIL import Image
@@ -129,47 +128,6 @@ class DatabaseManager:
                     except Exception as e:
                         print(f"Error adding column {column_name}: {e}")
             
-            # Categories table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS categories (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL UNIQUE,
-                    description TEXT,
-                    color TEXT DEFAULT '#3498db'
-                )
-            ''')
-            
-            # Tags table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS tags (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL UNIQUE,
-                    color TEXT DEFAULT '#27ae60'
-                )
-            ''')
-            
-            # Photo categories relationship
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS photo_categories (
-                    photo_id INTEGER,
-                    category_id INTEGER,
-                    PRIMARY KEY (photo_id, category_id),
-                    FOREIGN KEY (photo_id) REFERENCES photos (id) ON DELETE CASCADE,
-                    FOREIGN KEY (category_id) REFERENCES categories (id) ON DELETE CASCADE
-                )
-            ''')
-            
-            # Photo tags relationship
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS photo_tags (
-                    photo_id INTEGER,
-                    tag_id INTEGER,
-                    PRIMARY KEY (photo_id, tag_id),
-                    FOREIGN KEY (photo_id) REFERENCES photos (id) ON DELETE CASCADE,
-                    FOREIGN KEY (tag_id) REFERENCES tags (id) ON DELETE CASCADE
-                )
-            ''')
-            
             conn.commit()
     
     def add_photo(self, photo_data: Dict) -> int:
@@ -228,108 +186,20 @@ class DatabaseManager:
         
         return info
     
-    def get_photos(self, filters: Dict = None) -> List[Dict]:
-        """Retrieve photos with optional filtering."""
+    def get_photos(self) -> List[Dict]:
+        """Retrieve all photos."""
         with sqlite3.connect(str(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            
-            query = "SELECT * FROM photos"
-            params = []
-            
-            if filters:
-                conditions = []
-                if filters.get('category_id'):
-                    conditions.append('''
-                        id IN (SELECT photo_id FROM photo_categories WHERE category_id = ?)
-                    ''')
-                    params.append(filters['category_id'])
-                
-                if filters.get('tag_id'):
-                    conditions.append('''
-                        id IN (SELECT photo_id FROM photo_tags WHERE tag_id = ?)
-                    ''')
-                    params.append(filters['tag_id'])
-                
-                if filters.get('search_term'):
-                    conditions.append('filename LIKE ?')
-                    params.append(f"%{filters['search_term']}%")
-                
-                if conditions:
-                    query += " WHERE " + " AND ".join(conditions)
-            
-            query += " ORDER BY date_added DESC"
-            cursor.execute(query, params)
+            cursor.execute("SELECT * FROM photos ORDER BY date_added DESC")
             return [dict(row) for row in cursor.fetchall()]
-    
-    def add_category(self, name: str, description: str = "", color: str = "#3498db") -> int:
-        """Add a new category."""
-        with sqlite3.connect(str(self.db_path)) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO categories (name, description, color) VALUES (?, ?, ?)",
-                (name, description, color)
-            )
-            return cursor.lastrowid
-    
-    def add_tag(self, name: str, color: str = "#27ae60") -> int:
-        """Add a new tag."""
-        with sqlite3.connect(str(self.db_path)) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO tags (name, color) VALUES (?, ?)",
-                (name, color)
-            )
-            return cursor.lastrowid
-    
-    def get_categories(self) -> List[Dict]:
-        """Get all categories."""
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM categories ORDER BY name")
-            return [dict(row) for row in cursor.fetchall()]
-    
-    def get_tags(self) -> List[Dict]:
-        """Get all tags."""
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM tags ORDER BY name")
-            return [dict(row) for row in cursor.fetchall()]
-    
-    def assign_photo_category(self, photo_id: int, category_id: int):
-        """Assign a category to a photo."""
-        with sqlite3.connect(str(self.db_path)) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT OR IGNORE INTO photo_categories (photo_id, category_id) VALUES (?, ?)",
-                (photo_id, category_id)
-            )
-    
-    def assign_photo_tag(self, photo_id: int, tag_id: int):
-        """Assign a tag to a photo."""
-        with sqlite3.connect(str(self.db_path)) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT OR IGNORE INTO photo_tags (photo_id, tag_id) VALUES (?, ?)",
-                (photo_id, tag_id)
-            )
     
     def delete_photo(self, photo_id: int) -> bool:
         """Delete a photo from the database."""
         try:
             with sqlite3.connect(str(self.db_path)) as conn:
                 cursor = conn.cursor()
-                
-                # Delete photo relationships first (due to foreign key constraints)
-                cursor.execute("DELETE FROM photo_categories WHERE photo_id = ?", (photo_id,))
-                cursor.execute("DELETE FROM photo_tags WHERE photo_id = ?", (photo_id,))
-                
-                # Delete the photo record
                 cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
-                
-                # Check if deletion was successful
                 return cursor.rowcount > 0
         except Exception as e:
             print(f"Error deleting photo: {e}")
@@ -343,126 +213,6 @@ class DatabaseManager:
             cursor.execute("SELECT * FROM photos WHERE id = ?", (photo_id,))
             result = cursor.fetchone()
             return dict(result) if result else None
-    
-    def delete_category(self, category_id: int) -> bool:
-        """Delete a category and all its relationships."""
-        try:
-            with sqlite3.connect(str(self.db_path)) as conn:
-                cursor = conn.cursor()
-                
-                # Delete photo-category relationships first
-                cursor.execute("DELETE FROM photo_categories WHERE category_id = ?", (category_id,))
-                
-                # Delete the category
-                cursor.execute("DELETE FROM categories WHERE id = ?", (category_id,))
-                
-                return cursor.rowcount > 0
-        except Exception as e:
-            print(f"Error deleting category: {e}")
-            return False
-    
-    def delete_tag(self, tag_id: int) -> bool:
-        """Delete a tag and all its relationships."""
-        try:
-            with sqlite3.connect(str(self.db_path)) as conn:
-                cursor = conn.cursor()
-                
-                # Delete photo-tag relationships first
-                cursor.execute("DELETE FROM photo_tags WHERE tag_id = ?", (tag_id,))
-                
-                # Delete the tag
-                cursor.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
-                
-                return cursor.rowcount > 0
-        except Exception as e:
-            print(f"Error deleting tag: {e}")
-            return False
-    
-    def get_category_by_id(self, category_id: int) -> Optional[Dict]:
-        """Get a specific category by ID."""
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM categories WHERE id = ?", (category_id,))
-            result = cursor.fetchone()
-            return dict(result) if result else None
-    
-    def get_tag_by_id(self, tag_id: int) -> Optional[Dict]:
-        """Get a specific tag by ID."""
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM tags WHERE id = ?", (tag_id,))
-            result = cursor.fetchone()
-            return dict(result) if result else None
-    
-    def count_photos_by_category(self, category_id: int) -> int:
-        """Count how many photos are in a specific category."""
-        with sqlite3.connect(str(self.db_path)) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM photo_categories WHERE category_id = ?", (category_id,))
-            return cursor.fetchone()[0]
-    
-    def count_photos_by_tag(self, tag_id: int) -> int:
-        """Count how many photos have a specific tag."""
-        with sqlite3.connect(str(self.db_path)) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM photo_tags WHERE tag_id = ?", (tag_id,))
-            return cursor.fetchone()[0]
-    
-    def get_photo_categories(self, photo_id: int) -> List[Dict]:
-        """Get all categories assigned to a photo."""
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT c.* FROM categories c 
-                JOIN photo_categories pc ON c.id = pc.category_id 
-                WHERE pc.photo_id = ?
-                ORDER BY c.name
-            ''', (photo_id,))
-            return [dict(row) for row in cursor.fetchall()]
-    
-    def get_photo_tags(self, photo_id: int) -> List[Dict]:
-        """Get all tags assigned to a photo."""
-        with sqlite3.connect(str(self.db_path)) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT t.* FROM tags t 
-                JOIN photo_tags pt ON t.id = pt.tag_id 
-                WHERE pt.photo_id = ?
-                ORDER BY t.name
-            ''', (photo_id,))
-            return [dict(row) for row in cursor.fetchall()]
-    
-    def remove_photo_category(self, photo_id: int, category_id: int) -> bool:
-        """Remove a category from a photo."""
-        try:
-            with sqlite3.connect(str(self.db_path)) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "DELETE FROM photo_categories WHERE photo_id = ? AND category_id = ?",
-                    (photo_id, category_id)
-                )
-                return cursor.rowcount > 0
-        except Exception as e:
-            print(f"Error removing category from photo: {e}")
-            return False
-    
-    def remove_photo_tag(self, photo_id: int, tag_id: int) -> bool:
-        """Remove a tag from a photo."""
-        try:
-            with sqlite3.connect(str(self.db_path)) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "DELETE FROM photo_tags WHERE photo_id = ? AND tag_id = ?",
-                    (photo_id, tag_id)
-                )
-                return cursor.rowcount > 0
-        except Exception as e:
-            print(f"Error removing tag from photo: {e}")
-            return False
 
 
 class MetadataExtractor:
@@ -931,66 +681,6 @@ class PhotoListWidget(QListWidget):
             event.ignore()
 
 
-class CategoryTreeWidget(QTreeWidget):
-    """Custom tree widget for categories with context menu support."""
-    
-    category_delete_requested = Signal(int)
-    
-    def __init__(self):
-        super().__init__()
-        self.setHeaderLabel("Categories")
-        self.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.customContextMenuRequested.connect(self.show_context_menu)
-    
-    def show_context_menu(self, position: QPoint):
-        """Show context menu for category operations."""
-        item = self.itemAt(position)
-        if item is None:
-            return
-        
-        category_id = item.data(0, Qt.UserRole)
-        if category_id is None:
-            return
-        
-        menu = QMenu(self)
-        
-        delete_action = QAction("Delete Category", self)
-        delete_action.triggered.connect(lambda: self.category_delete_requested.emit(category_id))
-        menu.addAction(delete_action)
-        
-        menu.exec(self.mapToGlobal(position))
-
-
-class TagTreeWidget(QTreeWidget):
-    """Custom tree widget for tags with context menu support."""
-    
-    tag_delete_requested = Signal(int)
-    
-    def __init__(self):
-        super().__init__()
-        self.setHeaderLabel("Tags")
-        self.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.customContextMenuRequested.connect(self.show_context_menu)
-    
-    def show_context_menu(self, position: QPoint):
-        """Show context menu for tag operations."""
-        item = self.itemAt(position)
-        if item is None:
-            return
-        
-        tag_id = item.data(0, Qt.UserRole)
-        if tag_id is None:
-            return
-        
-        menu = QMenu(self)
-        
-        delete_action = QAction("Delete Tag", self)
-        delete_action.triggered.connect(lambda: self.tag_delete_requested.emit(tag_id))
-        menu.addAction(delete_action)
-        
-        menu.exec(self.mapToGlobal(position))
-
-
 class DatabaseInfoDialog(QDialog):
     """Dialog for displaying database information."""
     
@@ -1061,735 +751,6 @@ class DatabaseInfoDialog(QDialog):
             QMessageBox.warning(self, "Error", f"Could not open folder: {e}")
 
 
-class PhotoCategoriesTagsDialog(QDialog):
-    """Dialog for managing categories and tags for a specific photo, plus overall category/tag management."""
-    
-    def __init__(self, photo_data: Dict, db_manager: DatabaseManager, parent=None):
-        super().__init__(parent)
-        self.photo_data = photo_data
-        self.db_manager = db_manager
-        self.photo_id = photo_data.get('id')
-        self.parent_window = parent
-        self.setWindowTitle(f"Manage Categories & Tags - {photo_data.get('filename', 'Unknown')}")
-        self.setModal(True)
-        self.resize(800, 700)
-        self.setup_ui()
-        self.load_assignments()
-        self.load_all_categories_tags()
-    
-    def setup_ui(self):
-        layout = QVBoxLayout(self)
-        
-        # Create tab widget for different sections
-        self.tab_widget = QTabWidget()
-        layout.addWidget(self.tab_widget)
-        
-        # Tab 1: Assign to current photo
-        self.create_photo_assignment_tab()
-        
-        # Tab 2: Manage all categories
-        self.create_categories_management_tab()
-        
-        # Tab 3: Manage all tags
-        self.create_tags_management_tab()
-        
-        # Close button
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
-        close_btn = QPushButton("Close")
-        close_btn.clicked.connect(self.accept)
-        button_layout.addWidget(close_btn)
-        layout.addLayout(button_layout)
-    
-    def create_photo_assignment_tab(self):
-        """Create the tab for assigning categories/tags to the current photo."""
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        
-        # Photo info header
-        header_layout = QHBoxLayout()
-        
-        # Photo thumbnail
-        self.photo_thumbnail = QLabel()
-        self.photo_thumbnail.setFixedSize(100, 100)
-        self.photo_thumbnail.setStyleSheet("border: 1px solid gray")
-        self.photo_thumbnail.setAlignment(Qt.AlignCenter)
-        
-        try:
-            pixmap = ImageUtils.load_image_with_orientation(
-                self.photo_data['filepath'], 
-                QSize(100, 100)
-            )
-            if not pixmap.isNull():
-                self.photo_thumbnail.setPixmap(pixmap)
-            else:
-                self.photo_thumbnail.setText("No preview")
-        except:
-            self.photo_thumbnail.setText("No preview")
-        
-        header_layout.addWidget(self.photo_thumbnail)
-        
-        # Photo details
-        info_layout = QVBoxLayout()
-        filename_label = QLabel(f"<b>{self.photo_data.get('filename', 'Unknown')}</b>")
-        info_layout.addWidget(filename_label)
-        
-        if self.photo_data.get('date_taken'):
-            date_label = QLabel(f"Date: {self.photo_data['date_taken']}")
-            info_layout.addWidget(date_label)
-        
-        dimensions = self.photo_data.get('width'), self.photo_data.get('height')
-        if dimensions[0] and dimensions[1]:
-            size_label = QLabel(f"Size: {dimensions[0]} × {dimensions[1]}")
-            info_layout.addWidget(size_label)
-        
-        info_layout.addStretch()
-        header_layout.addLayout(info_layout)
-        header_layout.addStretch()
-        
-        layout.addLayout(header_layout)
-        
-        # Separator
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(separator)
-        
-        # Categories section
-        categories_group = QGroupBox("Categories")
-        categories_layout = QVBoxLayout(categories_group)
-        
-        # Current categories
-        current_categories_label = QLabel("Assigned Categories:")
-        current_categories_label.setStyleSheet("font-weight: bold;")
-        categories_layout.addWidget(current_categories_label)
-        
-        self.current_categories_layout = QHBoxLayout()
-        self.current_categories_widget = QWidget()
-        self.current_categories_widget.setLayout(self.current_categories_layout)
-        self.current_categories_widget.setMinimumHeight(50)
-        categories_layout.addWidget(self.current_categories_widget)
-        
-        # Add category section
-        add_category_layout = QHBoxLayout()
-        add_category_layout.addWidget(QLabel("Add Category:"))
-        self.category_combo = QComboBox()
-        self.category_combo.setMinimumWidth(200)
-        add_category_btn = QPushButton("Add")
-        add_category_btn.clicked.connect(self.add_category_to_photo)
-        add_category_layout.addWidget(self.category_combo)
-        add_category_layout.addWidget(add_category_btn)
-        add_category_layout.addStretch()
-        categories_layout.addLayout(add_category_layout)
-        
-        layout.addWidget(categories_group)
-        
-        # Tags section
-        tags_group = QGroupBox("Tags")
-        tags_layout = QVBoxLayout(tags_group)
-        
-        # Current tags
-        current_tags_label = QLabel("Assigned Tags:")
-        current_tags_label.setStyleSheet("font-weight: bold;")
-        tags_layout.addWidget(current_tags_label)
-        
-        self.current_tags_layout = QHBoxLayout()
-        self.current_tags_widget = QWidget()
-        self.current_tags_widget.setLayout(self.current_tags_layout)
-        self.current_tags_widget.setMinimumHeight(50)
-        tags_layout.addWidget(self.current_tags_widget)
-        
-        # Add tag section
-        add_tag_layout = QHBoxLayout()
-        add_tag_layout.addWidget(QLabel("Add Tag:"))
-        self.tag_combo = QComboBox()
-        self.tag_combo.setMinimumWidth(200)
-        add_tag_btn = QPushButton("Add")
-        add_tag_btn.clicked.connect(self.add_tag_to_photo)
-        add_tag_layout.addWidget(self.tag_combo)
-        add_tag_layout.addWidget(add_tag_btn)
-        add_tag_layout.addStretch()
-        tags_layout.addLayout(add_tag_layout)
-        
-        layout.addWidget(tags_group)
-        
-        # Populate dropdowns
-        self.populate_category_combo()
-        self.populate_tag_combo()
-        
-        self.tab_widget.addTab(tab, "Assign to Photo")
-    
-    def create_categories_management_tab(self):
-        """Create the tab for managing all categories."""
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        
-        # Header
-        header_label = QLabel("Manage Categories")
-        header_label.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px;")
-        layout.addWidget(header_label)
-        
-        # Create new category section
-        create_group = QGroupBox("Create New Category")
-        create_layout = QVBoxLayout(create_group)
-        
-        form_layout = QHBoxLayout()
-        form_layout.addWidget(QLabel("Name:"))
-        self.new_category_name = QLineEdit()
-        self.new_category_name.setPlaceholderText("Enter category name...")
-        form_layout.addWidget(self.new_category_name)
-        
-        form_layout.addWidget(QLabel("Description:"))
-        self.new_category_desc = QLineEdit()
-        self.new_category_desc.setPlaceholderText("Optional description...")
-        form_layout.addWidget(self.new_category_desc)
-        
-        create_cat_btn = QPushButton("Create Category")
-        create_cat_btn.clicked.connect(self.create_category_from_form)
-        form_layout.addWidget(create_cat_btn)
-        
-        create_layout.addLayout(form_layout)
-        layout.addWidget(create_group)
-        
-        # Existing categories section
-        existing_group = QGroupBox("Existing Categories")
-        existing_layout = QVBoxLayout(existing_group)
-        
-        self.categories_table = QTableWidget()
-        self.categories_table.setColumnCount(4)
-        self.categories_table.setHorizontalHeaderLabels(["Name", "Description", "Photos", "Actions"])
-        self.categories_table.horizontalHeader().setStretchLastSection(False)
-        self.categories_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.categories_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.categories_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.categories_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        existing_layout.addWidget(self.categories_table)
-        
-        layout.addWidget(existing_group)
-        
-        self.tab_widget.addTab(tab, "Manage Categories")
-    
-    def create_tags_management_tab(self):
-        """Create the tab for managing all tags."""
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        
-        # Header
-        header_label = QLabel("Manage Tags")
-        header_label.setStyleSheet("font-size: 16px; font-weight: bold; margin-bottom: 10px;")
-        layout.addWidget(header_label)
-        
-        # Create new tag section
-        create_group = QGroupBox("Create New Tag")
-        create_layout = QVBoxLayout(create_group)
-        
-        form_layout = QHBoxLayout()
-        form_layout.addWidget(QLabel("Name:"))
-        self.new_tag_name = QLineEdit()
-        self.new_tag_name.setPlaceholderText("Enter tag name...")
-        form_layout.addWidget(self.new_tag_name)
-        
-        create_tag_btn = QPushButton("Create Tag")
-        create_tag_btn.clicked.connect(self.create_tag_from_form)
-        form_layout.addWidget(create_tag_btn)
-        form_layout.addStretch()
-        
-        create_layout.addLayout(form_layout)
-        layout.addWidget(create_group)
-        
-        # Existing tags section
-        existing_group = QGroupBox("Existing Tags")
-        existing_layout = QVBoxLayout(existing_group)
-        
-        self.tags_table = QTableWidget()
-        self.tags_table.setColumnCount(3)
-        self.tags_table.setHorizontalHeaderLabels(["Name", "Photos", "Actions"])
-        self.tags_table.horizontalHeader().setStretchLastSection(False)
-        self.tags_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.tags_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.tags_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        existing_layout.addWidget(self.tags_table)
-        
-        layout.addWidget(existing_group)
-        
-        self.tab_widget.addTab(tab, "Manage Tags")
-    
-    def populate_category_combo(self):
-        """Populate the category combo box."""
-        self.category_combo.clear()
-        self.category_combo.addItem("Select a category...", None)
-        categories = self.db_manager.get_categories()
-        for category in categories:
-            self.category_combo.addItem(category['name'], category['id'])
-    
-    def populate_tag_combo(self):
-        """Populate the tag combo box."""
-        self.tag_combo.clear()
-        self.tag_combo.addItem("Select a tag...", None)
-        tags = self.db_manager.get_tags()
-        for tag in tags:
-            self.tag_combo.addItem(tag['name'], tag['id'])
-    
-    def clear_layout(self, layout):
-        """Clear all widgets from a layout."""
-        while layout.count():
-            child = layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-    
-    def create_removable_chip(self, text: str, remove_callback):
-        """Create a removable chip widget for categories/tags."""
-        chip_widget = QWidget()
-        chip_layout = QHBoxLayout(chip_widget)
-        chip_layout.setContentsMargins(8, 4, 8, 4)
-        chip_layout.setSpacing(4)
-        
-        # Style the chip with better contrast
-        chip_widget.setStyleSheet("""
-            QWidget {
-                background-color: #2c3e50;
-                border: 1px solid #34495e;
-                border-radius: 12px;
-                margin: 2px;
-            }
-        """)
-        
-        # Label with white text for better contrast
-        label = QLabel(text)
-        label.setStyleSheet("border: none; background: transparent; font-size: 12px; color: white; font-weight: bold;")
-        chip_layout.addWidget(label)
-        
-        # Remove button
-        remove_btn = QPushButton("×")
-        remove_btn.setFixedSize(16, 16)
-        remove_btn.setStyleSheet("""
-            QPushButton {
-                border: none;
-                background: transparent;
-                color: #ecf0f1;
-                font-weight: bold;
-                font-size: 14px;
-                border-radius: 8px;
-            }
-            QPushButton:hover {
-                background-color: #e74c3c;
-                color: white;
-            }
-        """)
-        remove_btn.clicked.connect(remove_callback)
-        chip_layout.addWidget(remove_btn)
-        
-        return chip_widget
-    
-    def load_assignments(self):
-        """Load current category and tag assignments."""
-        self.update_categories_display()
-        self.update_tags_display()
-    
-    def update_categories_display(self):
-        """Update the display of categories for the photo."""
-        self.clear_layout(self.current_categories_layout)
-        
-        categories = self.db_manager.get_photo_categories(self.photo_id)
-        
-        if not categories:
-            no_categories_label = QLabel("No categories assigned")
-            no_categories_label.setStyleSheet("color: #666; font-style: italic;")
-            self.current_categories_layout.addWidget(no_categories_label)
-        else:
-            for category in categories:
-                # Create a proper closure by using a helper function
-                chip = self.create_removable_chip(
-                    category['name'],
-                    self.make_remove_category_callback(category['id'])
-                )
-                self.current_categories_layout.addWidget(chip)
-        
-        self.current_categories_layout.addStretch()
-    
-    def update_tags_display(self):
-        """Update the display of tags for the photo."""
-        self.clear_layout(self.current_tags_layout)
-        
-        tags = self.db_manager.get_photo_tags(self.photo_id)
-        
-        if not tags:
-            no_tags_label = QLabel("No tags assigned")
-            no_tags_label.setStyleSheet("color: #666; font-style: italic;")
-            self.current_tags_layout.addWidget(no_tags_label)
-        else:
-            for tag in tags:
-                # Create a proper closure by using a helper function
-                chip = self.create_removable_chip(
-                    tag['name'],
-                    self.make_remove_tag_callback(tag['id'])
-                )
-                self.current_tags_layout.addWidget(chip)
-        
-        self.current_tags_layout.addStretch()
-    
-    def make_remove_category_callback(self, category_id: int):
-        """Create a proper callback function for removing a category."""
-        return lambda: self.remove_category_from_photo(category_id)
-    
-    def make_remove_tag_callback(self, tag_id: int):
-        """Create a proper callback function for removing a tag."""
-        return lambda: self.remove_tag_from_photo(tag_id)
-    
-    def add_category_to_photo(self):
-        """Add selected category to the photo."""
-        category_id = self.category_combo.currentData()
-        if category_id is None:
-            QMessageBox.warning(self, "No Category Selected", "Please select a category to add.")
-            return
-        
-        try:
-            self.db_manager.assign_photo_category(self.photo_id, category_id)
-            self.update_categories_display()
-            category_name = self.category_combo.currentText()
-            QMessageBox.information(self, "Success", f"Added category '{category_name}' to photo.")
-            self.category_combo.setCurrentIndex(0)  # Reset selection
-            
-            # Refresh parent window to show updated categories
-            if self.parent_window:
-                current_items = self.parent_window.photo_list.selectedItems()
-                if current_items:
-                    photo_data = current_items[0].data(Qt.UserRole)
-                    if photo_data and photo_data.get('id') == self.photo_id:
-                        self.parent_window.show_photo_details(photo_data)
-                        
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to add category: {e}")
-    
-    def add_tag_to_photo(self):
-        """Add selected tag to the photo."""
-        tag_id = self.tag_combo.currentData()
-        if tag_id is None:
-            QMessageBox.warning(self, "No Tag Selected", "Please select a tag to add.")
-            return
-        
-        try:
-            self.db_manager.assign_photo_tag(self.photo_id, tag_id)
-            self.update_tags_display()
-            tag_name = self.tag_combo.currentText()
-            QMessageBox.information(self, "Success", f"Added tag '{tag_name}' to photo.")
-            self.tag_combo.setCurrentIndex(0)  # Reset selection
-            
-            # Refresh parent window to show updated tags
-            if self.parent_window:
-                current_items = self.parent_window.photo_list.selectedItems()
-                if current_items:
-                    photo_data = current_items[0].data(Qt.UserRole)
-                    if photo_data and photo_data.get('id') == self.photo_id:
-                        self.parent_window.show_photo_details(photo_data)
-                        
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to add tag: {e}")
-    
-    def remove_category_from_photo(self, category_id: int):
-        """Remove a category from the photo."""
-        try:
-            if self.db_manager.remove_photo_category(self.photo_id, category_id):
-                self.update_categories_display()
-                QMessageBox.information(self, "Success", "Category removed from photo.")
-                
-                # Refresh parent window to show updated categories
-                if self.parent_window:
-                    current_items = self.parent_window.photo_list.selectedItems()
-                    if current_items:
-                        photo_data = current_items[0].data(Qt.UserRole)
-                        if photo_data and photo_data.get('id') == self.photo_id:
-                            self.parent_window.show_photo_details(photo_data)
-            else:
-                QMessageBox.warning(self, "Error", "Failed to remove category from photo.")
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to remove category: {e}")
-    
-    def remove_tag_from_photo(self, tag_id: int):
-        """Remove a tag from the photo."""
-        try:
-            if self.db_manager.remove_photo_tag(self.photo_id, tag_id):
-                self.update_tags_display()
-                QMessageBox.information(self, "Success", "Tag removed from photo.")
-                
-                # Refresh parent window to show updated tags
-                if self.parent_window:
-                    current_items = self.parent_window.photo_list.selectedItems()
-                    if current_items:
-                        photo_data = current_items[0].data(Qt.UserRole)
-                        if photo_data and photo_data.get('id') == self.photo_id:
-                            self.parent_window.show_photo_details(photo_data)
-            else:
-                QMessageBox.warning(self, "Error", "Failed to remove tag from photo.")
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to remove tag: {e}")
-    
-    def create_new_category(self):
-        """Create a new category."""
-        dialog = AddCategoryDialog(self)
-        if dialog.exec() == QDialog.Accepted:
-            name, description = dialog.get_data()
-            if name:
-                try:
-                    self.db_manager.add_category(name, description)
-                    self.populate_category_combo()
-                    QMessageBox.information(self, "Success", f"Category '{name}' created successfully.")
-                except Exception as e:
-                    QMessageBox.warning(self, "Error", f"Failed to create category: {e}")
-    
-    def create_new_tag(self):
-        """Create a new tag."""
-        dialog = AddTagDialog(self)
-        if dialog.exec() == QDialog.Accepted:
-            name = dialog.get_data()
-            if name:
-                try:
-                    self.db_manager.add_tag(name)
-                    self.populate_tag_combo()
-                    QMessageBox.information(self, "Success", f"Tag '{name}' created successfully.")
-                except Exception as e:
-                    QMessageBox.warning(self, "Error", f"Failed to create tag: {e}")
-    
-    def load_all_categories_tags(self):
-        """Load all categories and tags into the management tables."""
-        self.populate_categories_table()
-        self.populate_tags_table()
-    
-    def populate_categories_table(self):
-        """Populate the categories management table."""
-        categories = self.db_manager.get_categories()
-        self.categories_table.setRowCount(len(categories))
-        
-        for row, category in enumerate(categories):
-            # Name
-            name_item = QTableWidgetItem(category['name'])
-            self.categories_table.setItem(row, 0, name_item)
-            
-            # Description
-            desc_item = QTableWidgetItem(category.get('description', ''))
-            self.categories_table.setItem(row, 1, desc_item)
-            
-            # Photo count
-            photo_count = self.db_manager.count_photos_by_category(category['id'])
-            count_item = QTableWidgetItem(str(photo_count))
-            count_item.setTextAlignment(Qt.AlignCenter)
-            self.categories_table.setItem(row, 2, count_item)
-            
-            # Actions (Delete button)
-            delete_btn = QPushButton("Delete")
-            delete_btn.setStyleSheet("QPushButton { background-color: #f44336; color: white; }")
-            delete_btn.clicked.connect(lambda checked, cat_id=category['id']: self.delete_category(cat_id))
-            self.categories_table.setCellWidget(row, 3, delete_btn)
-    
-    def populate_tags_table(self):
-        """Populate the tags management table."""
-        tags = self.db_manager.get_tags()
-        self.tags_table.setRowCount(len(tags))
-        
-        for row, tag in enumerate(tags):
-            # Name
-            name_item = QTableWidgetItem(tag['name'])
-            self.tags_table.setItem(row, 0, name_item)
-            
-            # Photo count
-            photo_count = self.db_manager.count_photos_by_tag(tag['id'])
-            count_item = QTableWidgetItem(str(photo_count))
-            count_item.setTextAlignment(Qt.AlignCenter)
-            self.tags_table.setItem(row, 1, count_item)
-            
-            # Actions (Delete button)
-            delete_btn = QPushButton("Delete")
-            delete_btn.setStyleSheet("QPushButton { background-color: #f44336; color: white; }")
-            delete_btn.clicked.connect(lambda checked, tag_id=tag['id']: self.delete_tag(tag_id))
-            self.tags_table.setCellWidget(row, 2, delete_btn)
-    
-    def create_category_from_form(self):
-        """Create a new category from the form inputs."""
-        name = self.new_category_name.text().strip()
-        description = self.new_category_desc.text().strip()
-        
-        if not name:
-            QMessageBox.warning(self, "Invalid Input", "Please enter a category name.")
-            return
-        
-        try:
-            self.db_manager.add_category(name, description)
-            self.new_category_name.clear()
-            self.new_category_desc.clear()
-            self.populate_categories_table()
-            self.populate_category_combo()
-            QMessageBox.information(self, "Success", f"Category '{name}' created successfully.")
-            
-            # Refresh parent window if available
-            if self.parent_window:
-                self.parent_window.load_photos()
-                
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to create category: {e}")
-    
-    def create_tag_from_form(self):
-        """Create a new tag from the form inputs."""
-        name = self.new_tag_name.text().strip()
-        
-        if not name:
-            QMessageBox.warning(self, "Invalid Input", "Please enter a tag name.")
-            return
-        
-        try:
-            self.db_manager.add_tag(name)
-            self.new_tag_name.clear()
-            self.populate_tags_table()
-            self.populate_tag_combo()
-            QMessageBox.information(self, "Success", f"Tag '{name}' created successfully.")
-            
-            # Refresh parent window if available
-            if self.parent_window:
-                self.parent_window.load_photos()
-                
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to create tag: {e}")
-    
-    def delete_category(self, category_id: int):
-        """Delete a category from the system."""
-        try:
-            # Get category details for confirmation
-            category = self.db_manager.get_category_by_id(category_id)
-            if not category:
-                QMessageBox.warning(self, "Error", "Category not found.")
-                return
-            
-            # Count photos in this category
-            photo_count = self.db_manager.count_photos_by_category(category_id)
-            
-            # Create confirmation message
-            message = f"Are you sure you want to delete the category '{category['name']}'?"
-            if photo_count > 0:
-                message += f"\n\nThis category is currently assigned to {photo_count} photo(s). "
-                message += "Deleting the category will remove it from all photos, but the photos will remain in your catalog."
-            
-            # Ask for confirmation
-            reply = QMessageBox.question(
-                self,
-                "Delete Category",
-                message,
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
-            
-            if reply == QMessageBox.Yes:
-                # Delete from database
-                if self.db_manager.delete_category(category_id):
-                    QMessageBox.information(self, "Success", f"Category '{category['name']}' deleted successfully.")
-                    self.populate_categories_table()
-                    self.populate_category_combo()
-                    self.update_categories_display()  # Refresh current photo assignments
-                    
-                    # Refresh parent window if available
-                    if self.parent_window:
-                        self.parent_window.load_photos()
-                else:
-                    QMessageBox.warning(self, "Error", "Failed to delete category from database.")
-        
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"An error occurred while deleting the category: {str(e)}")
-    
-    def delete_tag(self, tag_id: int):
-        """Delete a tag from the system."""
-        try:
-            # Get tag details for confirmation
-            tag = self.db_manager.get_tag_by_id(tag_id)
-            if not tag:
-                QMessageBox.warning(self, "Error", "Tag not found.")
-                return
-            
-            # Count photos with this tag
-            photo_count = self.db_manager.count_photos_by_tag(tag_id)
-            
-            # Create confirmation message
-            message = f"Are you sure you want to delete the tag '{tag['name']}'?"
-            if photo_count > 0:
-                message += f"\n\nThis tag is currently assigned to {photo_count} photo(s). "
-                message += "Deleting the tag will remove it from all photos, but the photos will remain in your catalog."
-            
-            # Ask for confirmation
-            reply = QMessageBox.question(
-                self,
-                "Delete Tag",
-                message,
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
-            
-            if reply == QMessageBox.Yes:
-                # Delete from database
-                if self.db_manager.delete_tag(tag_id):
-                    QMessageBox.information(self, "Success", f"Tag '{tag['name']}' deleted successfully.")
-                    self.populate_tags_table()
-                    self.populate_tag_combo()
-                    self.update_tags_display()  # Refresh current photo assignments
-                    
-                    # Refresh parent window if available
-                    if self.parent_window:
-                        self.parent_window.load_photos()
-                else:
-                    QMessageBox.warning(self, "Error", "Failed to delete tag from database.")
-        
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"An error occurred while deleting the tag: {str(e)}")
-
-
-class AddCategoryDialog(QDialog):
-    """Dialog for adding new categories."""
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Add Category")
-        self.setModal(True)
-        self.setup_ui()
-    
-    def setup_ui(self):
-        layout = QFormLayout(self)
-        
-        self.name_edit = QLineEdit()
-        self.description_edit = QTextEdit()
-        self.description_edit.setMaximumHeight(80)
-        
-        layout.addRow("Name:", self.name_edit)
-        layout.addRow("Description:", self.description_edit)
-        
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addRow(buttons)
-    
-    def get_data(self) -> Tuple[str, str]:
-        return self.name_edit.text(), self.description_edit.toPlainText()
-
-
-class AddTagDialog(QDialog):
-    """Dialog for adding new tags."""
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Add Tag")
-        self.setModal(True)
-        self.setup_ui()
-    
-    def setup_ui(self):
-        layout = QFormLayout(self)
-        
-        self.name_edit = QLineEdit()
-        layout.addRow("Name:", self.name_edit)
-        
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addRow(buttons)
-    
-    def get_data(self) -> str:
-        return self.name_edit.text()
-
-
 class PhotoSphereMainWindow(QMainWindow):
     """Main application window."""
     
@@ -1811,7 +772,7 @@ class PhotoSphereMainWindow(QMainWindow):
     
     def setup_ui(self):
         self.setWindowTitle("PhotoSphere")
-        self.setGeometry(100, 100, 1400, 900)
+        self.setGeometry(100, 100, 1200, 900)
         
         # Create central widget and main layout
         central_widget = QWidget()
@@ -1822,7 +783,7 @@ class PhotoSphereMainWindow(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         main_layout.addWidget(splitter)
         
-        # Center panel (Photo grid) - no left panel needed now
+        # Center panel (Photo grid)
         center_panel = self.create_center_panel()
         splitter.addWidget(center_panel)
         
@@ -1830,8 +791,8 @@ class PhotoSphereMainWindow(QMainWindow):
         right_panel = self.create_right_panel()
         splitter.addWidget(right_panel)
         
-        # Set splitter proportions (no left panel)
-        splitter.setSizes([900, 400])
+        # Set splitter proportions
+        splitter.setSizes([800, 400])
         
         # Create menu bar
         self.create_menu_bar()
@@ -1846,30 +807,20 @@ class PhotoSphereMainWindow(QMainWindow):
         self.status_bar.addPermanentWidget(self.progress_bar)
     
     def create_center_panel(self) -> QWidget:
-        """Create the center panel with photo grid and search."""
+        """Create the center panel with photo grid."""
         panel = QWidget()
         layout = QVBoxLayout(panel)
         
-        # Toolbar with search and import
+        # Toolbar with import button and photo count
         toolbar_layout = QHBoxLayout()
-        
-        # Search section
-        search_label = QLabel("Search:")
-        toolbar_layout.addWidget(search_label)
-        
-        self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Search photos...")
-        self.search_edit.setMaximumWidth(300)
-        self.search_edit.textChanged.connect(self.filter_photos)
-        toolbar_layout.addWidget(self.search_edit)
-        
-        # Spacer
-        toolbar_layout.addStretch()
         
         # Import button
         import_btn = QPushButton("Import Photos")
         import_btn.clicked.connect(self.import_photos_dialog)
         toolbar_layout.addWidget(import_btn)
+        
+        # Spacer
+        toolbar_layout.addStretch()
         
         # Photo count
         self.photo_count_label = QLabel("0 photos")
@@ -1943,12 +894,18 @@ class PhotoSphereMainWindow(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
         
-        # Edit menu
-        edit_menu = menubar.addMenu("Edit")
+        # Help menu
+        help_menu = menubar.addMenu("Help")
         
-        categories_tags_action = QAction("Manage Categories/Tags", self)
-        categories_tags_action.triggered.connect(self.open_categories_tags_dialog)
-        edit_menu.addAction(categories_tags_action)
+        documentation_action = QAction("Documentation", self)
+        documentation_action.triggered.connect(self.open_documentation)
+        help_menu.addAction(documentation_action)
+        
+        help_menu.addSeparator()
+        
+        about_action = QAction("About", self)
+        about_action.triggered.connect(self.show_about)
+        help_menu.addAction(about_action)
     
     def update_database_status(self):
         """Update the database information in the status bar."""
@@ -1960,59 +917,59 @@ class PhotoSphereMainWindow(QMainWindow):
         dialog = DatabaseInfoDialog(self.db_manager, self)
         dialog.exec()
     
-    def open_categories_tags_dialog(self):
-        """Open the categories and tags management dialog for the current photo."""
-        # Get currently selected photo
-        current_items = self.photo_list.selectedItems()
-        if not current_items:
-            QMessageBox.information(
-                self, 
-                "No Photo Selected", 
-                "Please select a photo first to manage its categories and tags.\n\n"
-                "You can also use the 'Manage Categories' and 'Manage Tags' tabs "
-                "to create and delete categories and tags."
+    def open_documentation(self):
+        """Open the documentation URL in the default browser."""
+        import webbrowser
+        url = "https://github.com/jackworthen/photo-sphere"
+        try:
+            webbrowser.open(url)
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"Could not open browser. Please visit manually:\n{url}\n\nError: {e}"
             )
-            return
+    
+    def show_about(self):
+        """Show the About dialog."""
+        about_text = """
+        <h3>PhotoSphere</h3>
+        <p><b>Version:</b> 1.0</p>
+        <p><b>Description:</b> A robust application for organizing and cataloging photography with metadata extraction.</p>
         
-        photo_data = current_items[0].data(Qt.UserRole)
-        if not photo_data:
-            QMessageBox.warning(self, "Error", "Could not get photo data.")
-            return
+        <p><b>Features:</b></p>
+        <ul>
+        <li>Import photos with automatic metadata extraction</li>
+        <li>EXIF data parsing including GPS coordinates</li>
+        <li>Cross-platform database storage</li>
+        <li>Drag & drop photo import</li>
+        <li>Photo preview with proper orientation handling</li>
+        </ul>
         
-        dialog = PhotoCategoriesTagsDialog(photo_data, self.db_manager, self)
-        dialog.exec()
+        <p><b>Requirements:</b></p>
+        <p>PySide6, Pillow, exifread</p>
         
-        # Refresh the photo list in case categories/tags changed and affect filtering
-        self.load_photos()
+        <p><b>Documentation:</b><br>
+        <a href="https://github.com/jackworthen/photo-sphere">https://github.com/jackworthen/photo-sphere</a></p>
+        
+        <p><i>PhotoSphere - Your personal photo catalog solution</i></p>
+        """
+        
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("About PhotoSphere")
+        msg_box.setTextFormat(Qt.RichText)
+        msg_box.setText(about_text)
+        msg_box.setStandardButtons(QMessageBox.Ok)
+        msg_box.exec()
     
     def load_data(self):
         """Load photos from database."""
         self.load_photos()
     
-    def load_categories(self):
-        """Load categories into the tree widget."""
-        self.categories_tree.clear()
-        categories = self.db_manager.get_categories()
-        
-        for category in categories:
-            item = QTreeWidgetItem([category['name']])
-            item.setData(0, Qt.UserRole, category['id'])
-            self.categories_tree.addTopLevelItem(item)
-    
-    def load_tags(self):
-        """Load tags into the tree widget."""
-        self.tags_tree.clear()
-        tags = self.db_manager.get_tags()
-        
-        for tag in tags:
-            item = QTreeWidgetItem([tag['name']])
-            item.setData(0, Qt.UserRole, tag['id'])
-            self.tags_tree.addTopLevelItem(item)
-    
-    def load_photos(self, filters: Dict = None):
+    def load_photos(self):
         """Load photos into the list widget."""
         self.photo_list.clear()
-        self.current_photos = self.db_manager.get_photos(filters)
+        self.current_photos = self.db_manager.get_photos()
         
         for photo in self.current_photos:
             item = QListWidgetItem()
@@ -2081,28 +1038,9 @@ class PhotoSphereMainWindow(QMainWindow):
             print(f"Error loading preview for {photo['filename']}: {e}")
             self.photo_preview.setText("Preview error")
         
-        # Get categories and tags for this photo
-        photo_id = photo.get('id')
-        categories_text = "None"
-        tags_text = "None"
-        
-        if photo_id:
-            try:
-                categories = self.db_manager.get_photo_categories(photo_id)
-                if categories:
-                    categories_text = ", ".join([cat['name'] for cat in categories])
-                
-                tags = self.db_manager.get_photo_tags(photo_id)
-                if tags:
-                    tags_text = ", ".join([tag['name'] for tag in tags])
-            except Exception as e:
-                print(f"Error loading categories/tags: {e}")
-        
         # Update details table
         details = [
             ("Filename", photo.get('filename', '')),
-            ("Categories", categories_text),
-            ("Tags", tags_text),
             ("File Size", f"{photo.get('file_size', 0) / 1024:.1f} KB" if photo.get('file_size') else ''),
             ("Dimensions", f"{photo.get('width', '')} × {photo.get('height', '')}" if photo.get('width') else ''),
             ("Date Added", photo.get('date_added', '')),
@@ -2145,19 +1083,8 @@ class PhotoSphereMainWindow(QMainWindow):
             prop_item = QTableWidgetItem(prop)
             self.details_table.setItem(i, 0, prop_item)
             
-            # Special styling for categories and tags
-            if prop in ["Categories", "Tags"]:
-                if value != "None":
-                    # Use standard styling like other items
-                    styled_item = QTableWidgetItem(value)
-                    styled_item.setToolTip(f"Use 'Edit → Manage Categories/Tags' to modify")
-                    self.details_table.setItem(i, 1, styled_item)
-                else:
-                    none_item = QTableWidgetItem(value)
-                    none_item.setForeground(Qt.gray)
-                    self.details_table.setItem(i, 1, none_item)
             # Special handling for Google Maps link
-            elif prop == "Google Maps" and value:
+            if prop == "Google Maps" and value:
                 # Create a clickable link with standard styling
                 link_item = QTableWidgetItem(f"View on Google Maps")
                 link_item.setData(Qt.UserRole, value)  # Store the actual URL
@@ -2187,14 +1114,6 @@ class PhotoSphereMainWindow(QMainWindow):
                         "Google Maps", 
                         f"Could not open browser. You can manually visit:\n{url}"
                     )
-    
-    def filter_photos(self):
-        """Filter photos based on search term."""
-        search_term = self.search_edit.text()
-        if search_term:
-            self.load_photos({'search_term': search_term})
-        else:
-            self.load_photos()
     
     def delete_photo(self, photo_id: int):
         """Delete a photo from the catalog."""
