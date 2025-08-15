@@ -1,19 +1,3 @@
-"""
-PhotoSphere Application - Simplified Version
-A robust application for organizing and cataloging photography with metadata extraction.
-
-Requirements:
-pip install PySide6 Pillow exifread
-
-For HEIC/HEIF support (optional):
-pip install pillow-heif
-
-Installation Instructions:
-1. Install basic requirements: pip install PySide6 Pillow exifread
-2. For HEIC support: pip install pillow-heif
-3. Restart PhotoSphere after installing pillow-heif
-"""
-
 import sys
 import os
 import sqlite3
@@ -1222,7 +1206,7 @@ class PhotoSphereMainWindow(QMainWindow):
         # Update details table
         details = [
             ("Filename", photo.get('filename', '')),
-            ("File Size", f"{photo.get('file_size', 0) / 1024:.1f} KB" if photo.get('file_size') else ''),
+            ("File Size", f"{photo.get('file_size', 0) / (1024 * 1024):.2f} MB" if photo.get('file_size') else ''),
             ("Dimensions", f"{photo.get('width', '')} × {photo.get('height', '')}" if photo.get('width') else ''),
             ("Date Added", photo.get('date_added', '')),
             ("Date Taken", photo.get('date_taken', '')),
