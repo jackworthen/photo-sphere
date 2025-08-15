@@ -4,6 +4,14 @@ A robust application for organizing and cataloging photography with metadata ext
 
 Requirements:
 pip install PySide6 Pillow exifread
+
+For HEIC/HEIF support (optional):
+pip install pillow-heif
+
+Installation Instructions:
+1. Install basic requirements: pip install PySide6 Pillow exifread
+2. For HEIC support: pip install pillow-heif
+3. Restart PhotoSphere after installing pillow-heif
 """
 
 import sys
@@ -31,6 +39,16 @@ from PySide6.QtGui import QPixmap, QIcon, QDragEnterEvent, QDropEvent, QAction, 
 from PIL import Image
 from PIL.ExifTags import TAGS
 import exifread
+
+# Add HEIC/HEIF support
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+    HEIC_SUPPORTED = True
+    print("HEIC/HEIF support enabled")
+except ImportError:
+    HEIC_SUPPORTED = False
+    print("HEIC/HEIF support not available - install pillow-heif for HEIC support")
 
 
 def get_app_data_dir() -> Path:
@@ -548,10 +566,24 @@ class ImageUtils:
         return pixmap.transformed(transform, Qt.SmoothTransformation)
     
     @staticmethod
+    def is_heic_file(file_path: str) -> bool:
+        """Check if a file is a HEIC/HEIF file."""
+        return file_path.lower().endswith(('.heic', '.heif'))
+    
+    @staticmethod
     def load_image_with_orientation(file_path: str, max_size: QSize = None) -> QPixmap:
         """Load an image and apply proper orientation based on EXIF data."""
         try:
-            # Load the pixmap
+            # Check if it's a HEIC file and handle differently
+            if ImageUtils.is_heic_file(file_path):
+                if HEIC_SUPPORTED:
+                    return ImageUtils.load_heic_image(file_path, max_size)
+                else:
+                    # HEIC file but no support - return a placeholder
+                    print(f"HEIC file detected but support not available: {file_path}")
+                    return ImageUtils.create_heic_placeholder(max_size)
+            
+            # Standard image loading for non-HEIC files
             pixmap = QPixmap(file_path)
             if pixmap.isNull():
                 return pixmap
@@ -579,6 +611,105 @@ class ImageUtils:
         except Exception as e:
             print(f"Error loading image {file_path}: {e}")
             return QPixmap()
+    
+    @staticmethod
+    def create_heic_placeholder(max_size: QSize = None) -> QPixmap:
+        """Create a placeholder image for HEIC files when support is not available."""
+        try:
+            from PySide6.QtCore import Qt
+            from PySide6.QtGui import QPainter, QFont, QColor
+            
+            # Create default size if not specified
+            if max_size is None:
+                width, height = 150, 150
+            else:
+                width, height = max_size.width(), max_size.height()
+            
+            # Create a pixmap with gray background
+            pixmap = QPixmap(width, height)
+            pixmap.fill(QColor(200, 200, 200))  # Light gray
+            
+            # Draw text on the pixmap
+            painter = QPainter(pixmap)
+            painter.setFont(QFont("Arial", max(8, width // 15)))
+            painter.setPen(QColor(100, 100, 100))  # Dark gray text
+            
+            # Draw "HEIC" text
+            text_rect = pixmap.rect()
+            painter.drawText(text_rect, Qt.AlignCenter, "HEIC\nFile")
+            
+            # Draw smaller help text
+            painter.setFont(QFont("Arial", max(6, width // 20)))
+            help_rect = text_rect.adjusted(5, height//2, -5, -5)
+            painter.drawText(help_rect, Qt.AlignCenter | Qt.TextWordWrap, "Install\npillow-heif\nfor support")
+            
+            painter.end()
+            return pixmap
+            
+        except Exception as e:
+            print(f"Error creating HEIC placeholder: {e}")
+            # Return empty pixmap as fallback
+            return QPixmap()
+    
+    @staticmethod
+    def load_heic_image(file_path: str, max_size: QSize = None) -> QPixmap:
+        """Load a HEIC/HEIF image and convert it to QPixmap."""
+        try:
+            print(f"Loading HEIC image: {file_path}")
+            
+            # Open HEIC image using Pillow with HEIF support
+            with Image.open(file_path) as img:
+                # Convert to RGB if not already (HEIC might be in different color space)
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
+                # Get orientation from EXIF data
+                orientation = None
+                try:
+                    exif_data = img.getexif()
+                    if exif_data:
+                        orientation = exif_data.get(274)  # 274 is the EXIF tag for Orientation
+                except:
+                    pass
+                
+                # Resize if max_size is specified
+                if max_size:
+                    # Calculate the size to fit within max_size while keeping aspect ratio
+                    img.thumbnail((max_size.width(), max_size.height()), Image.Resampling.LANCZOS)
+                
+                # Convert PIL Image to QPixmap
+                # First convert to bytes
+                import io
+                img_byte_arr = io.BytesIO()
+                img.save(img_byte_arr, format='PNG')
+                img_byte_arr.seek(0)
+                
+                # Create QPixmap from bytes
+                pixmap = QPixmap()
+                pixmap.loadFromData(img_byte_arr.getvalue())
+                
+                # Apply orientation correction if needed
+                if orientation and not pixmap.isNull():
+                    pixmap = ImageUtils.apply_exif_orientation(pixmap, orientation)
+                
+                print(f"Successfully loaded HEIC image: {file_path}")
+                return pixmap
+                
+        except Exception as e:
+            print(f"Error loading HEIC image {file_path}: {e}")
+            # Try fallback method
+            try:
+                # Simple fallback - try to load as regular image (might work in some cases)
+                pixmap = QPixmap(file_path)
+                if not pixmap.isNull():
+                    print(f"HEIC image loaded using fallback method: {file_path}")
+                    if max_size:
+                        pixmap = pixmap.scaled(max_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    return pixmap
+            except:
+                pass
+            
+            return QPixmap()
 
 
 class PhotoImportWorker(QThread):
@@ -588,6 +719,7 @@ class PhotoImportWorker(QThread):
     photo_imported = Signal(dict)
     import_finished = Signal()
     error_occurred = Signal(str)
+    heic_warning = Signal(str)  # New signal for HEIC warnings
     
     def __init__(self, file_paths: List[str], db_manager: DatabaseManager):
         super().__init__()
@@ -597,16 +729,24 @@ class PhotoImportWorker(QThread):
     def run(self):
         total_files = len(self.file_paths)
         successfully_imported = 0
+        heic_files_found = []
         
         for i, file_path in enumerate(self.file_paths):
             try:
                 print(f"Importing: {file_path}")
+                
+                # Check if it's a HEIC file without support
+                if file_path.lower().endswith(('.heic', '.heif')) and not HEIC_SUPPORTED:
+                    heic_files_found.append(Path(file_path).name)
+                    print(f"HEIC file detected but support not available: {file_path}")
+                
                 metadata = MetadataExtractor.extract_metadata(file_path)
                 photo_id = self.db_manager.add_photo(metadata)
                 metadata['id'] = photo_id
                 self.photo_imported.emit(metadata)
                 successfully_imported += 1
                 print(f"Successfully imported: {file_path}")
+                
             except Exception as e:
                 error_msg = f"Error importing {Path(file_path).name}: {str(e)}"
                 print(error_msg)
@@ -614,6 +754,13 @@ class PhotoImportWorker(QThread):
             
             progress = int((i + 1) / total_files * 100)
             self.progress_updated.emit(progress)
+        
+        # Emit HEIC warning if HEIC files were found but support is not available
+        if heic_files_found and not HEIC_SUPPORTED:
+            warning_msg = f"HEIC files detected but cannot be displayed:\n\n"
+            warning_msg += "\n".join(heic_files_found)
+            warning_msg += f"\n\nTo enable HEIC support, install pillow-heif:\npip install pillow-heif\n\nThen restart PhotoSphere."
+            self.heic_warning.emit(warning_msg)
         
         print(f"Import completed: {successfully_imported}/{total_files} files imported successfully")
         self.import_finished.emit()
@@ -670,7 +817,11 @@ class PhotoListWidget(QListWidget):
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls():
             urls = event.mimeData().urls()
-            if any(url.toLocalFile().lower().endswith(('.jpg', '.jpeg', '.png', '.tiff', '.bmp', '.gif')) 
+            supported_extensions = ['.jpg', '.jpeg', '.png', '.tiff', '.bmp', '.gif']
+            if HEIC_SUPPORTED:
+                supported_extensions.extend(['.heic', '.heif'])
+            
+            if any(url.toLocalFile().lower().endswith(tuple(supported_extensions)) 
                    for url in urls):
                 event.acceptProposedAction()
             else:
@@ -681,9 +832,13 @@ class PhotoListWidget(QListWidget):
     def dropEvent(self, event: QDropEvent):
         if event.mimeData().hasUrls():
             file_paths = []
+            supported_extensions = ['.jpg', '.jpeg', '.png', '.tiff', '.bmp', '.gif']
+            if HEIC_SUPPORTED:
+                supported_extensions.extend(['.heic', '.heif'])
+            
             for url in event.mimeData().urls():
                 file_path = url.toLocalFile()
-                if file_path.lower().endswith(('.jpg', '.jpeg', '.png', '.tiff', '.bmp', '.gif')):
+                if file_path.lower().endswith(tuple(supported_extensions)):
                     file_paths.append(file_path)
             
             if file_paths:
@@ -777,7 +932,8 @@ class PhotoSphereMainWindow(QMainWindow):
         
         # Show database location in status bar
         db_info = self.db_manager.get_database_info()
-        self.status_bar.showMessage(f"Database: {db_info['directory']}")
+        heic_status = " | HEIC Support: Enabled" if HEIC_SUPPORTED else " | HEIC Support: Disabled"
+        self.status_bar.showMessage(f"Database: {db_info['directory']}{heic_status}")
         
         # Set up a timer to periodically update database size in status
         self.db_info_timer = QTimer()
@@ -925,7 +1081,8 @@ class PhotoSphereMainWindow(QMainWindow):
     def update_database_status(self):
         """Update the database information in the status bar."""
         db_info = self.db_manager.get_database_info()
-        self.status_bar.showMessage(f"Database: {db_info['directory']} ({db_info['size']})")
+        heic_status = " | HEIC Support: Enabled" if HEIC_SUPPORTED else " | HEIC Support: Disabled"
+        self.status_bar.showMessage(f"Database: {db_info['directory']} ({db_info['size']}){heic_status}")
     
     def show_database_info(self):
         """Show the database information dialog."""
@@ -947,7 +1104,10 @@ class PhotoSphereMainWindow(QMainWindow):
     
     def show_about(self):
         """Show the About dialog."""
-        about_text = """
+        heic_status = "✓ Enabled" if HEIC_SUPPORTED else "✗ Not Available"
+        heic_instructions = "" if HEIC_SUPPORTED else "<br><b>To enable HEIC support:</b><br>1. Run: <code>pip install pillow-heif</code><br>2. Restart PhotoSphere"
+        
+        about_text = f"""
         <h3>PhotoSphere</h3>
         <p><b>Version:</b> 1.0</p>
         <p><b>Description:</b> A robust application for organizing and cataloging photography with metadata extraction.</p>
@@ -962,8 +1122,16 @@ class PhotoSphereMainWindow(QMainWindow):
         <li>Double-click to open photos in default viewer</li>
         </ul>
         
+        <p><b>Supported Formats:</b></p>
+        <ul>
+        <li>JPEG, PNG, TIFF, BMP, GIF</li>
+        <li>HEIC/HEIF: {heic_status}</li>
+        </ul>
+        {heic_instructions}
+        
         <p><b>Requirements:</b></p>
-        <p>PySide6, Pillow, exifread</p>
+        <p>PySide6, Pillow, exifread<br>
+        <i>Optional:</i> pillow-heif (for HEIC/HEIF support)</p>
         
         <p><b>Documentation:</b><br>
         <a href="https://github.com/jackworthen/photo-sphere">https://github.com/jackworthen/photo-sphere</a></p>
@@ -1000,6 +1168,9 @@ class PhotoSphereMainWindow(QMainWindow):
                 )
                 if not pixmap.isNull():
                     item.setIcon(QIcon(pixmap))
+                    print(f"Thumbnail loaded successfully for: {photo['filename']}")
+                else:
+                    print(f"Failed to load thumbnail for: {photo['filename']}")
             except Exception as e:
                 print(f"Error loading thumbnail for {photo['filename']}: {e}")
             
@@ -1208,11 +1379,41 @@ class PhotoSphereMainWindow(QMainWindow):
     def import_photos_dialog(self):
         """Open file dialog to select photos for import."""
         file_dialog = QFileDialog()
+        
+        # Build comprehensive file filters
+        filters = []
+        
+        # All supported images filter
+        all_extensions = "*.jpg *.jpeg *.png *.tiff *.tif *.bmp *.gif"
+        if HEIC_SUPPORTED:
+            all_extensions += " *.heic *.heif"
+        filters.append(f"All Supported Images ({all_extensions})")
+        
+        # Individual format filters
+        filters.append("JPEG Images (*.jpg *.jpeg)")
+        filters.append("PNG Images (*.png)")
+        filters.append("TIFF Images (*.tiff *.tif)")
+        filters.append("BMP Images (*.bmp)")
+        filters.append("GIF Images (*.gif)")
+        
+        # Add HEIC filter if supported
+        if HEIC_SUPPORTED:
+            filters.append("HEIC/HEIF Images (*.heic *.heif)")
+        
+        # All files fallback
+        filters.append("All Files (*)")
+        
+        # Join all filters
+        file_filter = ";;".join(filters)
+        
+        print(f"HEIC Support: {HEIC_SUPPORTED}")
+        print(f"File filter: {file_filter}")
+        
         file_paths, _ = file_dialog.getOpenFileNames(
             self,
             "Select Photos to Import",
             "",
-            "Image Files (*.jpg *.jpeg *.png *.tiff *.bmp *.gif)"
+            file_filter
         )
         
         print(f"Selected files: {file_paths}")
@@ -1236,6 +1437,7 @@ class PhotoSphereMainWindow(QMainWindow):
         self.import_worker.photo_imported.connect(self.on_photo_imported)
         self.import_worker.import_finished.connect(self.on_import_finished)
         self.import_worker.error_occurred.connect(self.on_import_error)
+        self.import_worker.heic_warning.connect(self.on_heic_warning)  # Connect new signal
         self.import_worker.start()
     
     def on_photo_imported(self, photo_data: Dict):
@@ -1247,6 +1449,14 @@ class PhotoSphereMainWindow(QMainWindow):
         print(f"Import error: {error_message}")
         # You can also show this in a message box if you want:
         # QMessageBox.warning(self, "Import Error", error_message)
+    
+    def on_heic_warning(self, warning_message: str):
+        """Handle HEIC support warning."""
+        QMessageBox.warning(
+            self,
+            "HEIC Support Required",
+            warning_message
+        )
     
     def on_import_finished(self):
         """Handle import completion."""
