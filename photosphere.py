@@ -72,14 +72,19 @@ class DatabaseManager:
         # Create the directory if it doesn't exist
         self.app_data_dir.mkdir(parents=True, exist_ok=True)
         
+        # Create thumbnail cache directory
+        self.thumbnail_cache_dir = self.app_data_dir / "thumbnails"
+        self.thumbnail_cache_dir.mkdir(exist_ok=True)
+        
         # Set the full database path
         self.db_path = self.app_data_dir / db_name
         
         print(f"Database location: {self.db_path}")
+        print(f"Thumbnail cache: {self.thumbnail_cache_dir}")
         self.init_database()
     
     def init_database(self):
-        """Initialize the database with required tables."""
+        """Initialize the database with required tables and indexes."""
         with sqlite3.connect(str(self.db_path)) as conn:
             cursor = conn.cursor()
             
@@ -111,6 +116,17 @@ class DatabaseManager:
                 )
             ''')
             
+            # Thumbnail cache table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS thumbnail_cache (
+                    photo_id INTEGER PRIMARY KEY,
+                    thumbnail_path TEXT,
+                    created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    file_modified_date TIMESTAMP,
+                    FOREIGN KEY (photo_id) REFERENCES photos (id) ON DELETE CASCADE
+                )
+            ''')
+            
             # Check if GPS columns exist and add them if they don't (migration)
             cursor.execute("PRAGMA table_info(photos)")
             columns = [column[1] for column in cursor.fetchall()]
@@ -130,7 +146,23 @@ class DatabaseManager:
                     except Exception as e:
                         print(f"Error adding column {column_name}: {e}")
             
+            # Create indexes for better performance
+            indexes = [
+                "CREATE INDEX IF NOT EXISTS idx_photos_date_added ON photos(date_added)",
+                "CREATE INDEX IF NOT EXISTS idx_photos_date_taken ON photos(date_taken)",
+                "CREATE INDEX IF NOT EXISTS idx_photos_filename ON photos(filename)",
+                "CREATE INDEX IF NOT EXISTS idx_photos_filepath ON photos(filepath)",
+                "CREATE INDEX IF NOT EXISTS idx_thumbnail_cache_photo_id ON thumbnail_cache(photo_id)"
+            ]
+            
+            for index_sql in indexes:
+                try:
+                    cursor.execute(index_sql)
+                except Exception as e:
+                    print(f"Error creating index: {e}")
+            
             conn.commit()
+            print("Database initialization completed")
     
     def add_photo(self, photo_data: Dict) -> int:
         """Add a new photo to the database."""
@@ -168,6 +200,104 @@ class DatabaseManager:
             ))
             return cursor.lastrowid
     
+    def get_thumbnail_path(self, photo_id: int, file_path: str) -> Optional[str]:
+        """Get cached thumbnail path if it exists and is current."""
+        with sqlite3.connect(str(self.db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT thumbnail_path, file_modified_date FROM thumbnail_cache WHERE photo_id = ?",
+                (photo_id,)
+            )
+            result = cursor.fetchone()
+            
+            if result:
+                thumb_path, cached_modified = result
+                
+                # Check if files exist and are current
+                if thumb_path and os.path.exists(thumb_path) and os.path.exists(file_path):
+                    try:
+                        current_modified = datetime.fromtimestamp(
+                            os.path.getmtime(file_path)
+                        ).isoformat()
+                        
+                        if cached_modified == current_modified:
+                            return thumb_path
+                    except Exception as e:
+                        print(f"Error checking file modification time: {e}")
+            
+        return None
+    
+    def cache_thumbnail(self, photo_id: int, file_path: str, thumbnail_pixmap: QPixmap) -> Optional[str]:
+        """Cache a thumbnail for future use."""
+        try:
+            # Generate thumbnail filename
+            thumb_filename = f"thumb_{photo_id}.jpg"
+            thumb_path = self.thumbnail_cache_dir / thumb_filename
+            
+            # Save thumbnail
+            if thumbnail_pixmap.save(str(thumb_path), "JPEG", 85):
+                # Get file modification time
+                file_modified = datetime.fromtimestamp(
+                    os.path.getmtime(file_path)
+                ).isoformat()
+                
+                # Update database
+                with sqlite3.connect(str(self.db_path)) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO thumbnail_cache 
+                        (photo_id, thumbnail_path, file_modified_date)
+                        VALUES (?, ?, ?)
+                    ''', (photo_id, str(thumb_path), file_modified))
+                    conn.commit()
+                
+                return str(thumb_path)
+            
+        except Exception as e:
+            print(f"Error caching thumbnail for photo {photo_id}: {e}")
+        
+        return None
+    
+    def cleanup_orphaned_thumbnails(self):
+        """Clean up thumbnail files for deleted photos."""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                cursor = conn.cursor()
+                
+                # Get thumbnail paths for photos that no longer exist
+                cursor.execute('''
+                    SELECT tc.thumbnail_path 
+                    FROM thumbnail_cache tc 
+                    LEFT JOIN photos p ON tc.photo_id = p.id 
+                    WHERE p.id IS NULL
+                ''')
+                
+                orphaned_paths = cursor.fetchall()
+                
+                # Delete orphaned thumbnail files
+                deleted_count = 0
+                for (thumb_path,) in orphaned_paths:
+                    try:
+                        if thumb_path and os.path.exists(thumb_path):
+                            os.remove(thumb_path)
+                            deleted_count += 1
+                    except Exception as e:
+                        print(f"Error deleting thumbnail {thumb_path}: {e}")
+                
+                # Remove orphaned records from database
+                cursor.execute('''
+                    DELETE FROM thumbnail_cache 
+                    WHERE photo_id NOT IN (SELECT id FROM photos)
+                ''')
+                
+                conn.commit()
+                
+                if deleted_count > 0:
+                    print(f"Cleaned up {deleted_count} orphaned thumbnails")
+                    
+        except Exception as e:
+            print(f"Error cleaning up thumbnails: {e}")
+    
     def get_database_info(self) -> Dict[str, str]:
         """Get information about the database location and size."""
         info = {
@@ -186,23 +316,74 @@ class DatabaseManager:
             else:
                 info['size'] = f"{size_bytes / (1024 * 1024):.1f} MB"
         
+        # Add thumbnail cache info
+        cache_size = 0
+        cache_count = 0
+        try:
+            for thumb_file in self.thumbnail_cache_dir.glob("thumb_*.jpg"):
+                cache_size += thumb_file.stat().st_size
+                cache_count += 1
+            
+            if cache_size < 1024 * 1024:
+                cache_size_str = f"{cache_size / 1024:.1f} KB"
+            else:
+                cache_size_str = f"{cache_size / (1024 * 1024):.1f} MB"
+            
+            info['thumbnail_cache_size'] = cache_size_str
+            info['thumbnail_count'] = str(cache_count)
+        except:
+            info['thumbnail_cache_size'] = "Unknown"
+            info['thumbnail_count'] = "0"
+        
         return info
     
-    def get_photos(self) -> List[Dict]:
-        """Retrieve all photos."""
+    def get_photos(self, limit: Optional[int] = None, offset: int = 0) -> List[Dict]:
+        """Retrieve photos with optional pagination."""
         with sqlite3.connect(str(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM photos ORDER BY date_added DESC")
+            
+            if limit:
+                cursor.execute(
+                    "SELECT * FROM photos ORDER BY date_added DESC LIMIT ? OFFSET ?",
+                    (limit, offset)
+                )
+            else:
+                cursor.execute("SELECT * FROM photos ORDER BY date_added DESC")
+            
             return [dict(row) for row in cursor.fetchall()]
     
+    def get_total_photo_count(self) -> int:
+        """Get total number of photos."""
+        with sqlite3.connect(str(self.db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM photos")
+            return cursor.fetchone()[0]
+    
     def delete_photo(self, photo_id: int) -> bool:
-        """Delete a photo from the database."""
+        """Delete a photo from the database and its cached thumbnail."""
         try:
             with sqlite3.connect(str(self.db_path)) as conn:
                 cursor = conn.cursor()
+                
+                # Get thumbnail path before deleting
+                cursor.execute("SELECT thumbnail_path FROM thumbnail_cache WHERE photo_id = ?", (photo_id,))
+                result = cursor.fetchone()
+                if result and result[0]:
+                    thumb_path = result[0]
+                    try:
+                        if os.path.exists(thumb_path):
+                            os.remove(thumb_path)
+                    except Exception as e:
+                        print(f"Error deleting thumbnail file: {e}")
+                
+                # Delete from photos table (thumbnail_cache will cascade delete)
                 cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
-                return cursor.rowcount > 0
+                success = cursor.rowcount > 0
+                
+                conn.commit()
+                return success
+                
         except Exception as e:
             print(f"Error deleting photo: {e}")
             return False
@@ -215,6 +396,53 @@ class DatabaseManager:
             cursor.execute("SELECT * FROM photos WHERE id = ?", (photo_id,))
             result = cursor.fetchone()
             return dict(result) if result else None
+
+
+class ThumbnailWorker(QThread):
+    """Worker thread for generating thumbnails in the background."""
+    
+    thumbnail_ready = Signal(int, QPixmap)  # photo_id, pixmap
+    thumbnail_failed = Signal(int, str)     # photo_id, error_message
+    
+    def __init__(self, photo_id: int, file_path: str, db_manager: DatabaseManager):
+        super().__init__()
+        self.photo_id = photo_id
+        self.file_path = file_path
+        self.db_manager = db_manager
+    
+    def run(self):
+        """Generate thumbnail in background thread."""
+        try:
+            # Check cache first
+            cached_thumb = self.db_manager.get_thumbnail_path(self.photo_id, self.file_path)
+            if cached_thumb:
+                pixmap = QPixmap(cached_thumb)
+                if not pixmap.isNull():
+                    self.thumbnail_ready.emit(self.photo_id, pixmap)
+                    return
+            
+            # Check if original file still exists
+            if not os.path.exists(self.file_path):
+                self.thumbnail_failed.emit(self.photo_id, "File not found")
+                return
+            
+            # Generate new thumbnail
+            pixmap = ImageUtils.load_image_with_orientation(
+                self.file_path, 
+                QSize(150, 150)
+            )
+            
+            if not pixmap.isNull():
+                # Cache the thumbnail
+                self.db_manager.cache_thumbnail(self.photo_id, self.file_path, pixmap)
+                self.thumbnail_ready.emit(self.photo_id, pixmap)
+            else:
+                self.thumbnail_failed.emit(self.photo_id, "Failed to load image")
+                
+        except Exception as e:
+            error_msg = f"Error generating thumbnail: {str(e)}"
+            print(f"Thumbnail worker error for {self.file_path}: {error_msg}")
+            self.thumbnail_failed.emit(self.photo_id, error_msg)
 
 
 class MetadataExtractor:
@@ -745,13 +973,18 @@ class PhotoImportWorker(QThread):
 
 
 class PhotoListWidget(QListWidget):
-    """Custom list widget for displaying photos with drag and drop support."""
+    """Custom list widget for displaying photos with drag and drop support and lazy loading."""
     
     photo_delete_requested = Signal(int)  # Signal emitted when photo deletion is requested
     photo_open_requested = Signal(str)    # Signal emitted when photo should be opened in default viewer
     
-    def __init__(self):
+    def __init__(self, db_manager: DatabaseManager):
         super().__init__()
+        self.db_manager = db_manager
+        self.thumbnail_workers = {}  # Track active thumbnail workers
+        self.loaded_thumbnails = set()  # Track which thumbnails have been loaded
+        self.pending_updates = []  # Track pending thumbnail updates
+        
         self.setAcceptDrops(True)
         self.setDragDropMode(QAbstractItemView.DropOnly)
         self.setDefaultDropAction(Qt.CopyAction)
@@ -761,6 +994,166 @@ class PhotoListWidget(QListWidget):
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
         self.itemDoubleClicked.connect(self.on_item_double_clicked)
+        
+        # Set uniform item sizes to prevent layout issues
+        self.setUniformItemSizes(True)
+        self.setGridSize(QSize(160, 180))  # Slightly larger than icon for proper spacing
+        
+        # Connect to scroll changes for lazy loading
+        self.verticalScrollBar().valueChanged.connect(self.on_scroll_changed)
+        self.itemEntered.connect(self.on_item_entered)
+        
+        # Timer for delayed loading to avoid loading during rapid scrolling
+        self.load_timer = QTimer()
+        self.load_timer.setSingleShot(True)
+        self.load_timer.timeout.connect(self.load_visible_thumbnails)
+        
+        # Timer for batch thumbnail updates to prevent layout issues
+        self.update_timer = QTimer()
+        self.update_timer.setSingleShot(True)
+        self.update_timer.timeout.connect(self.process_pending_updates)
+    
+    def on_scroll_changed(self):
+        """Handle scroll changes with delayed loading."""
+        self.load_timer.stop()
+        self.load_timer.start(150)  # 150ms delay
+    
+    def on_item_entered(self, item):
+        """Load thumbnail when mouse hovers over item."""
+        if item:
+            self.load_thumbnail_for_item(item)
+    
+    def load_visible_thumbnails(self):
+        """Load thumbnails only for currently visible items plus buffer."""
+        try:
+            viewport_rect = self.viewport().rect()
+            
+            # Find visible items
+            visible_items = []
+            for i in range(self.count()):
+                item = self.item(i)
+                if item:
+                    item_rect = self.visualItemRect(item)
+                    if item_rect.intersects(viewport_rect):
+                        visible_items.append(item)
+            
+            # Add buffer items (items just outside visible area)
+            buffer = 5  # Load 5 extra items above and below
+            if visible_items:
+                first_visible_row = self.row(visible_items[0])
+                last_visible_row = self.row(visible_items[-1])
+                
+                # Add buffer items
+                start_row = max(0, first_visible_row - buffer)
+                end_row = min(self.count() - 1, last_visible_row + buffer)
+                
+                for row in range(start_row, end_row + 1):
+                    item = self.item(row)
+                    if item and item not in visible_items:
+                        visible_items.append(item)
+            
+            # Load thumbnails for visible items
+            for item in visible_items:
+                self.load_thumbnail_for_item(item)
+                
+        except Exception as e:
+            print(f"Error loading visible thumbnails: {e}")
+    
+    def load_thumbnail_for_item(self, item: QListWidgetItem):
+        """Load thumbnail for a specific item if not already loaded."""
+        if not item:
+            return
+            
+        photo_data = item.data(Qt.UserRole)
+        if not photo_data:
+            return
+            
+        photo_id = photo_data.get('id')
+        if not photo_id or photo_id in self.loaded_thumbnails:
+            return
+            
+        # Don't start a new worker if one is already running for this photo
+        if photo_id in self.thumbnail_workers:
+            return
+        
+        file_path = photo_data.get('filepath')
+        if not file_path:
+            return
+        
+        # Start thumbnail worker
+        worker = ThumbnailWorker(photo_id, file_path, self.db_manager)
+        worker.thumbnail_ready.connect(self.on_thumbnail_ready)
+        worker.thumbnail_failed.connect(self.on_thumbnail_failed)
+        worker.finished.connect(lambda: self.cleanup_worker(photo_id))
+        
+        self.thumbnail_workers[photo_id] = worker
+        worker.start()
+    
+    def on_thumbnail_ready(self, photo_id: int, pixmap: QPixmap):
+        """Handle successful thumbnail generation with batch updates."""
+        self.loaded_thumbnails.add(photo_id)
+        
+        # Add to pending updates instead of updating immediately
+        self.pending_updates.append((photo_id, pixmap))
+        
+        # Start or restart the update timer to batch updates
+        self.update_timer.stop()
+        self.update_timer.start(50)  # 50ms delay to batch multiple updates
+    
+    def process_pending_updates(self):
+        """Process all pending thumbnail updates in batch."""
+        if not self.pending_updates:
+            return
+        
+        # Temporarily disable updates to prevent flicker
+        self.setUpdatesEnabled(False)
+        
+        try:
+            # Process all pending updates
+            for photo_id, pixmap in self.pending_updates:
+                # Find the item with this photo_id and set its icon
+                for i in range(self.count()):
+                    item = self.item(i)
+                    if item:
+                        photo_data = item.data(Qt.UserRole)
+                        if photo_data and photo_data.get('id') == photo_id:
+                            item.setIcon(QIcon(pixmap))
+                            break
+            
+            # Clear pending updates
+            self.pending_updates.clear()
+            
+            # Force a complete layout recalculation
+            self.doItemsLayout()
+            
+        finally:
+            # Re-enable updates
+            self.setUpdatesEnabled(True)
+            # Force a repaint
+            self.viewport().update()
+    
+    def on_thumbnail_failed(self, photo_id: int, error_message: str):
+        """Handle thumbnail generation failure."""
+        self.loaded_thumbnails.add(photo_id)  # Don't try again
+        print(f"Thumbnail failed for photo {photo_id}: {error_message}")
+    
+    def cleanup_worker(self, photo_id: int):
+        """Clean up completed worker threads."""
+        if photo_id in self.thumbnail_workers:
+            worker = self.thumbnail_workers[photo_id]
+            worker.deleteLater()
+            del self.thumbnail_workers[photo_id]
+    
+    def clear_thumbnails(self):
+        """Clear all thumbnails and loaded state."""
+        # Stop all running workers
+        for worker in self.thumbnail_workers.values():
+            worker.quit()
+            worker.wait()
+        self.thumbnail_workers.clear()
+        self.loaded_thumbnails.clear()
+        self.pending_updates.clear()
+        self.update_timer.stop()
     
     def show_context_menu(self, position: QPoint):
         """Show context menu for photo operations."""
@@ -844,7 +1237,7 @@ class DatabaseInfoDialog(QDialog):
         info = self.db_manager.get_database_info()
         
         # Create a table for the information
-        table = QTableWidget(4, 2)
+        table = QTableWidget(6, 2)
         table.setHorizontalHeaderLabels(["Property", "Value"])
         table.horizontalHeader().setStretchLastSection(True)
         table.verticalHeader().hide()
@@ -853,7 +1246,9 @@ class DatabaseInfoDialog(QDialog):
             ("Database File", Path(info['path']).name),
             ("Directory", info['directory']),
             ("Full Path", info['path']),
-            ("Size", info['size'])
+            ("Database Size", info['size']),
+            ("Thumbnail Cache Size", info.get('thumbnail_cache_size', 'Unknown')),
+            ("Cached Thumbnails", info.get('thumbnail_count', '0'))
         ]
         
         for i, (prop, value) in enumerate(data):
@@ -870,6 +1265,10 @@ class DatabaseInfoDialog(QDialog):
         open_folder_btn.clicked.connect(self.open_database_folder)
         button_layout.addWidget(open_folder_btn)
         
+        cleanup_btn = QPushButton("Cleanup Thumbnails")
+        cleanup_btn.clicked.connect(self.cleanup_thumbnails)
+        button_layout.addWidget(cleanup_btn)
+        
         button_layout.addStretch()
         
         close_btn = QPushButton("Close")
@@ -878,7 +1277,29 @@ class DatabaseInfoDialog(QDialog):
         
         layout.addLayout(button_layout)
         
-        self.resize(500, 200)
+        self.resize(500, 250)
+    
+    def cleanup_thumbnails(self):
+        """Clean up orphaned thumbnails."""
+        reply = QMessageBox.question(
+            self,
+            "Cleanup Thumbnails",
+            "This will remove thumbnail files for photos that no longer exist in the catalog.\n\n"
+            "Do you want to continue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            try:
+                self.db_manager.cleanup_orphaned_thumbnails()
+                QMessageBox.information(self, "Cleanup Complete", "Orphaned thumbnails have been cleaned up.")
+                # Refresh the dialog
+                self.accept()
+                new_dialog = DatabaseInfoDialog(self.db_manager, self.parent())
+                new_dialog.exec()
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Failed to cleanup thumbnails: {str(e)}")
     
     def open_database_folder(self):
         """Open the database folder in the system file manager."""
@@ -899,14 +1320,16 @@ class DatabaseInfoDialog(QDialog):
 
 
 class PhotoSphereMainWindow(QMainWindow):
-    """Main application window."""
+    """Main application window with optimized loading."""
     
     def __init__(self):
         super().__init__()
         self.db_manager = DatabaseManager()
         self.current_photos = []
         self.setup_ui()
-        self.load_data()
+        
+        # Show window immediately, load data afterward
+        QTimer.singleShot(0, self.load_data_async)
         
         # Show database location in status bar
         db_info = self.db_manager.get_database_info()
@@ -971,13 +1394,13 @@ class PhotoSphereMainWindow(QMainWindow):
         toolbar_layout.addStretch()
         
         # Photo count
-        self.photo_count_label = QLabel("0 photos")
+        self.photo_count_label = QLabel("Loading photos...")
         toolbar_layout.addWidget(self.photo_count_label)
         
         layout.addLayout(toolbar_layout)
         
-        # Photo list
-        self.photo_list = PhotoListWidget()
+        # Photo list with db_manager reference
+        self.photo_list = PhotoListWidget(self.db_manager)
         self.photo_list.itemClicked.connect(self.on_photo_selected)
         self.photo_list.photo_delete_requested.connect(self.delete_photo)
         self.photo_list.photo_open_requested.connect(self.open_photo_in_default_viewer)
@@ -1056,6 +1479,48 @@ class PhotoSphereMainWindow(QMainWindow):
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
     
+    def load_data_async(self):
+        """Load data asynchronously after UI is shown."""
+        # Clean up orphaned thumbnails on startup (in background)
+        QTimer.singleShot(1000, self.db_manager.cleanup_orphaned_thumbnails)
+        
+        # Load photo metadata without thumbnails for fast startup
+        self.load_photos_metadata_only()
+        
+        # Start loading visible thumbnails after a short delay
+        QTimer.singleShot(200, self.photo_list.load_visible_thumbnails)
+    
+    def load_photos_metadata_only(self):
+        """Load photo metadata without thumbnails for fast startup."""
+        try:
+            self.photo_list.clear_thumbnails()
+            self.photo_list.clear()
+            
+            self.current_photos = self.db_manager.get_photos()
+            
+            for photo in self.current_photos:
+                item = QListWidgetItem()
+                item.setText(photo['filename'])
+                item.setData(Qt.UserRole, photo)
+                
+                # Don't set any placeholder icon - let thumbnails appear as they load
+                # This should prevent layout conflicts
+                
+                self.photo_list.addItem(item)
+            
+            self.photo_count_label.setText(f"{len(self.current_photos)} photos")
+            
+            # Update status
+            if len(self.current_photos) > 0:
+                self.status_bar.showMessage("Photos loaded - thumbnails loading in background", 3000)
+            else:
+                self.status_bar.showMessage("No photos in catalog", 3000)
+                
+        except Exception as e:
+            print(f"Error loading photos: {e}")
+            self.photo_count_label.setText("Error loading photos")
+            QMessageBox.warning(self, "Error", f"Failed to load photos: {str(e)}")
+    
     def update_database_status(self):
         """Update the database information in the status bar."""
         db_info = self.db_manager.get_database_info()
@@ -1087,7 +1552,7 @@ class PhotoSphereMainWindow(QMainWindow):
         
         about_text = f"""
         <h3>PhotoSphere</h3>
-        <p><b>Version:</b> 1.0</p>
+        <p><b>Version:</b> 1.1 (Performance Optimized)</p>
         <p><b>Description:</b> A robust application for organizing and cataloging photography with metadata extraction.</p>
         
         <p><b>Features:</b></p>
@@ -1098,6 +1563,8 @@ class PhotoSphereMainWindow(QMainWindow):
         <li>Drag & drop photo import</li>
         <li>Photo preview with proper orientation handling</li>
         <li>Double-click to open photos in default viewer</li>
+        <li>Optimized lazy loading for fast startup</li>
+        <li>Thumbnail caching system</li>
         </ul>
         
         <p><b>Supported Formats:</b></p>
@@ -1125,42 +1592,16 @@ class PhotoSphereMainWindow(QMainWindow):
         msg_box.exec()
     
     def load_data(self):
-        """Load photos from database."""
-        self.load_photos()
-    
-    def load_photos(self):
-        """Load photos into the list widget."""
-        self.photo_list.clear()
-        self.current_photos = self.db_manager.get_photos()
-        
-        for photo in self.current_photos:
-            item = QListWidgetItem()
-            item.setText(photo['filename'])
-            item.setData(Qt.UserRole, photo)
-            
-            # Try to load thumbnail with proper orientation
-            try:
-                pixmap = ImageUtils.load_image_with_orientation(
-                    photo['filepath'], 
-                    QSize(150, 150)
-                )
-                if not pixmap.isNull():
-                    item.setIcon(QIcon(pixmap))
-                    print(f"Thumbnail loaded successfully for: {photo['filename']}")
-                else:
-                    print(f"Failed to load thumbnail for: {photo['filename']}")
-            except Exception as e:
-                print(f"Error loading thumbnail for {photo['filename']}: {e}")
-            
-            self.photo_list.addItem(item)
-        
-        self.photo_count_label.setText(f"{len(self.current_photos)} photos")
+        """Load photos from database (kept for compatibility)."""
+        self.load_photos_metadata_only()
     
     def on_photo_selected(self, item: QListWidgetItem):
         """Handle photo selection to show details."""
         photo = item.data(Qt.UserRole)
         if photo:
             self.show_photo_details(photo)
+            # Ensure thumbnail is loaded for selected photo
+            self.photo_list.load_thumbnail_for_item(item)
     
     def format_gps_coordinate(self, lat: float, lon: float) -> str:
         """Format GPS coordinates for display."""
@@ -1305,7 +1746,9 @@ class PhotoSphereMainWindow(QMainWindow):
                 if self.db_manager.delete_photo(photo_id):
                     self.status_bar.showMessage(f"Deleted: {photo['filename']}", 3000)
                     # Reload the photo list
-                    self.load_photos()
+                    self.load_photos_metadata_only()
+                    # Start loading visible thumbnails
+                    QTimer.singleShot(100, self.photo_list.load_visible_thumbnails)
                     # Clear the preview if this photo was selected
                     self.photo_preview.clear()
                     self.photo_preview.setText("Select a photo to view details")
@@ -1415,7 +1858,7 @@ class PhotoSphereMainWindow(QMainWindow):
         self.import_worker.photo_imported.connect(self.on_photo_imported)
         self.import_worker.import_finished.connect(self.on_import_finished)
         self.import_worker.error_occurred.connect(self.on_import_error)
-        self.import_worker.heic_warning.connect(self.on_heic_warning)  # Connect new signal
+        self.import_worker.heic_warning.connect(self.on_heic_warning)
         self.import_worker.start()
     
     def on_photo_imported(self, photo_data: Dict):
@@ -1425,8 +1868,6 @@ class PhotoSphereMainWindow(QMainWindow):
     def on_import_error(self, error_message: str):
         """Handle import error."""
         print(f"Import error: {error_message}")
-        # You can also show this in a message box if you want:
-        # QMessageBox.warning(self, "Import Error", error_message)
     
     def on_heic_warning(self, warning_message: str):
         """Handle HEIC support warning."""
@@ -1439,7 +1880,9 @@ class PhotoSphereMainWindow(QMainWindow):
     def on_import_finished(self):
         """Handle import completion."""
         self.progress_bar.hide()
-        self.load_photos()
+        self.load_photos_metadata_only()
+        # Start loading visible thumbnails
+        QTimer.singleShot(100, self.photo_list.load_visible_thumbnails)
         self.status_bar.showMessage("Import completed successfully", 3000)
         print("Import process finished")
 
@@ -1448,7 +1891,7 @@ def main():
     """Main application entry point."""
     app = QApplication(sys.argv)
     app.setApplicationName("PhotoSphere")
-    app.setApplicationVersion("1.0")
+    app.setApplicationVersion("1.1")
     
     # Show where the database will be stored
     app_data_dir = get_app_data_dir()
