@@ -62,6 +62,18 @@ def get_app_data_dir() -> Path:
             return Path.home() / ".local" / "share" / app_name
 
 
+def get_resource_path(relative_path: str) -> Path:
+    """Get the absolute path to a resource, works for both development and PyInstaller."""
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = Path(sys._MEIPASS)
+    except AttributeError:
+        # Development mode - resources are relative to this script
+        base_path = Path(__file__).parent
+    
+    return base_path / relative_path
+
+
 class DatabaseManager:
     """Handles all database operations for the PhotoSphere catalog."""
     
@@ -1345,6 +1357,18 @@ class PhotoSphereMainWindow(QMainWindow):
         self.setWindowTitle("PhotoSphere")
         self.setGeometry(100, 100, 1200, 900)
         
+        # Set application icon
+        try:
+            icon_path = get_resource_path("ps_icon.ico")
+            if icon_path.exists():
+                icon = QIcon(str(icon_path))
+                self.setWindowIcon(icon)
+                print(f"Application icon loaded from: {icon_path}")
+            else:
+                print(f"Icon file not found at: {icon_path}")
+        except Exception as e:
+            print(f"Error loading application icon: {e}")
+        
         # Create central widget and main layout
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -1892,6 +1916,18 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("PhotoSphere")
     app.setApplicationVersion("1.1")
+    
+    # Set application icon for taskbar, alt-tab, etc.
+    try:
+        icon_path = get_resource_path("ps_icon.ico")
+        if icon_path.exists():
+            app_icon = QIcon(str(icon_path))
+            app.setWindowIcon(app_icon)
+            print(f"Application icon set from: {icon_path}")
+        else:
+            print(f"Icon file not found at: {icon_path}")
+    except Exception as e:
+        print(f"Error setting application icon: {e}")
     
     # Show where the database will be stored
     app_data_dir = get_app_data_dir()
