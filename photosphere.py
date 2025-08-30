@@ -1676,6 +1676,14 @@ class PhotoSphereMainWindow(QMainWindow):
             print(f"Error loading preview for {photo['filename']}: {e}")
             self.photo_preview.setText("Preview error")
         
+        # Helper function to check if value should be displayed
+        def should_show_value(value):
+            if value is None:
+                return False
+            if isinstance(value, str):
+                return value.strip() != "" and value.strip().lower() != "none"
+            return True
+        
         # Update details table
         details = [
             ("Filename", photo.get('filename', '')),
@@ -1691,6 +1699,9 @@ class PhotoSphereMainWindow(QMainWindow):
             ("ISO", photo.get('iso', '')),
         ]
         
+        # Filter out empty values
+        details = [(prop, value) for prop, value in details if should_show_value(value)]
+        
         # Add GPS information if available
         lat = photo.get('gps_latitude')
         lon = photo.get('gps_longitude')
@@ -1700,20 +1711,25 @@ class PhotoSphereMainWindow(QMainWindow):
         if lat is not None and lon is not None:
             # Add formatted coordinates
             coords_formatted = self.format_gps_coordinate(lat, lon)
-            details.append(("GPS Coordinates", coords_formatted))
+            if should_show_value(coords_formatted):
+                details.append(("GPS Coordinates", coords_formatted))
             
             # Add decimal coordinates for reference
-            details.append(("GPS (Decimal)", f"{lat:.6f}, {lon:.6f}"))
+            decimal_coords = f"{lat:.6f}, {lon:.6f}"
+            if should_show_value(decimal_coords):
+                details.append(("GPS (Decimal)", decimal_coords))
             
             # Add Google Maps link
             maps_link = self.get_google_maps_link(lat, lon)
-            details.append(("Google Maps", maps_link))
+            if should_show_value(maps_link):
+                details.append(("Google Maps", maps_link))
         
         if alt is not None:
             alt_text = f"{alt:.1f}m" + (" above sea level" if alt >= 0 else " below sea level")
-            details.append(("Altitude", alt_text))
+            if should_show_value(alt_text):
+                details.append(("Altitude", alt_text))
             
-        if location_name:
+        if should_show_value(location_name):
             details.append(("Location", location_name))
         
         self.details_table.setRowCount(len(details))
