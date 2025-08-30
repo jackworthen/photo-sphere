@@ -441,7 +441,7 @@ class ThumbnailWorker(QThread):
             # Generate new thumbnail
             pixmap = ImageUtils.load_image_with_orientation(
                 self.file_path, 
-                QSize(150, 150)
+                QSize(120, 120)
             )
             
             if not pixmap.isNull():
@@ -989,6 +989,7 @@ class PhotoListWidget(QListWidget):
     
     photo_delete_requested = Signal(int)  # Signal emitted when photo deletion is requested
     photo_open_requested = Signal(str)    # Signal emitted when photo should be opened in default viewer
+    photo_save_copy_requested = Signal(str)  # Signal emitted when photo copy is requested (filepath)
     
     def __init__(self, db_manager: DatabaseManager):
         super().__init__()
@@ -1000,7 +1001,7 @@ class PhotoListWidget(QListWidget):
         self.setAcceptDrops(True)
         self.setDragDropMode(QAbstractItemView.DropOnly)
         self.setDefaultDropAction(Qt.CopyAction)
-        self.setIconSize(QSize(150, 150))
+        self.setIconSize(QSize(120, 120))
         self.setResizeMode(QListWidget.Adjust)
         self.setViewMode(QListWidget.IconMode)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1009,7 +1010,7 @@ class PhotoListWidget(QListWidget):
         
         # Set uniform item sizes to prevent layout issues
         self.setUniformItemSizes(True)
-        self.setGridSize(QSize(160, 180))  # Slightly larger than icon for proper spacing
+        self.setGridSize(QSize(130, 150))  # Slightly larger than icon for proper spacing
         
         # Connect to scroll changes for lazy loading
         self.verticalScrollBar().valueChanged.connect(self.on_scroll_changed)
@@ -1183,9 +1184,14 @@ class PhotoListWidget(QListWidget):
         open_action.triggered.connect(lambda: self.photo_open_requested.emit(photo_data['filepath']))
         menu.addAction(open_action)
         
+        # Add the new Save Copy action
+        save_copy_action = QAction("Save Copy", self)
+        save_copy_action.triggered.connect(lambda: self.photo_save_copy_requested.emit(photo_data['filepath']))
+        menu.addAction(save_copy_action)
+        
         menu.addSeparator()
         
-        delete_action = QAction("Delete Photo", self)
+        delete_action = QAction("Remove Photo", self)
         delete_action.triggered.connect(lambda: self.photo_delete_requested.emit(photo_data['id']))
         menu.addAction(delete_action)
         
@@ -1428,6 +1434,7 @@ class PhotoSphereMainWindow(QMainWindow):
         self.photo_list.itemClicked.connect(self.on_photo_selected)
         self.photo_list.photo_delete_requested.connect(self.delete_photo)
         self.photo_list.photo_open_requested.connect(self.open_photo_in_default_viewer)
+        self.photo_list.photo_save_copy_requested.connect(self.save_photo_copy)
         layout.addWidget(self.photo_list)
         
         return panel
@@ -1443,7 +1450,7 @@ class PhotoSphereMainWindow(QMainWindow):
         
         self.photo_preview = QLabel()
         self.photo_preview.setAlignment(Qt.AlignCenter)
-        self.photo_preview.setMinimumHeight(200)
+        self.photo_preview.setMinimumHeight(350)
         self.photo_preview.setStyleSheet("border: 1px solid gray")
         self.photo_preview.setText("Select a photo to view details")
         preview_layout.addWidget(self.photo_preview)
@@ -1587,6 +1594,7 @@ class PhotoSphereMainWindow(QMainWindow):
         <li>Drag & drop photo import</li>
         <li>Photo preview with proper orientation handling</li>
         <li>Double-click to open photos in default viewer</li>
+        <li>Save copies of photos to custom locations</li>
         <li>Optimized lazy loading for fast startup</li>
         <li>Thumbnail caching system</li>
         </ul>
@@ -1658,7 +1666,7 @@ class PhotoSphereMainWindow(QMainWindow):
         try:
             pixmap = ImageUtils.load_image_with_orientation(
                 photo['filepath'], 
-                QSize(300, 300)
+                QSize(400, 400)
             )
             if not pixmap.isNull():
                 self.photo_preview.setPixmap(pixmap)
@@ -1745,6 +1753,119 @@ class PhotoSphereMainWindow(QMainWindow):
                         f"Could not open browser. You can manually visit:\n{url}"
                     )
     
+    def save_photo_copy(self, file_path: str):
+        """Save a copy of the photo to a user-selected location."""
+        try:
+            # Check if source file exists
+            if not os.path.exists(file_path):
+                QMessageBox.warning(
+                    self,
+                    "File Not Found",
+                    f"The source photo file could not be found:\n{file_path}\n\n"
+                    "The file may have been moved or deleted."
+                )
+                return
+            
+            # Get the original filename and extension
+            source_path = Path(file_path)
+            original_filename = source_path.name
+            file_extension = source_path.suffix.lower()
+            
+            # Set up file filter based on the original file type
+            file_filters = []
+            
+            if file_extension in ['.jpg', '.jpeg']:
+                file_filters.append("JPEG Images (*.jpg *.jpeg)")
+            elif file_extension == '.png':
+                file_filters.append("PNG Images (*.png)")
+            elif file_extension in ['.tiff', '.tif']:
+                file_filters.append("TIFF Images (*.tiff *.tif)")
+            elif file_extension == '.bmp':
+                file_filters.append("BMP Images (*.bmp)")
+            elif file_extension == '.gif':
+                file_filters.append("GIF Images (*.gif)")
+            elif file_extension in ['.heic', '.heif']:
+                file_filters.append("HEIC/HEIF Images (*.heic *.heif)")
+            
+            # Add common image formats
+            file_filters.extend([
+                "JPEG Images (*.jpg *.jpeg)",
+                "PNG Images (*.png)",
+                "TIFF Images (*.tiff *.tif)",
+                "BMP Images (*.bmp)",
+                "GIF Images (*.gif)"
+            ])
+            
+            if HEIC_SUPPORTED:
+                file_filters.append("HEIC/HEIF Images (*.heic *.heif)")
+            
+            file_filters.append("All Files (*)")
+            
+            # Create save dialog
+            save_dialog = QFileDialog(self)
+            save_dialog.setAcceptMode(QFileDialog.AcceptSave)
+            save_dialog.setFileMode(QFileDialog.AnyFile)
+            save_dialog.setNameFilters(file_filters)
+            save_dialog.setDefaultSuffix(file_extension.lstrip('.'))
+            
+            # Set default filename
+            save_dialog.selectFile(original_filename)
+            
+            # Set dialog title
+            save_dialog.setWindowTitle(f"Save Copy of {original_filename}")
+            
+            # Show dialog and get result
+            if save_dialog.exec() == QDialog.Accepted:
+                selected_files = save_dialog.selectedFiles()
+                if selected_files:
+                    destination_path = selected_files[0]
+                    
+                    # Check if destination already exists
+                    if os.path.exists(destination_path):
+                        reply = QMessageBox.question(
+                            self,
+                            "File Exists",
+                            f"A file already exists at:\n{destination_path}\n\n"
+                            "Do you want to overwrite it?",
+                            QMessageBox.Yes | QMessageBox.No,
+                            QMessageBox.No
+                        )
+                        
+                        if reply != QMessageBox.Yes:
+                            return
+                    
+                    # Copy the file
+                    try:
+                        shutil.copy2(file_path, destination_path)
+                        self.status_bar.showMessage(
+                            f"Copy saved: {Path(destination_path).name}", 
+                            5000
+                        )
+                        
+                        # Show success message
+                        QMessageBox.information(
+                            self,
+                            "Copy Saved",
+                            f"Photo copy successfully saved to:\n{destination_path}"
+                        )
+                        
+                    except Exception as copy_error:
+                        QMessageBox.critical(
+                            self,
+                            "Copy Failed",
+                            f"Failed to copy the photo.\n\n"
+                            f"Source: {file_path}\n"
+                            f"Destination: {destination_path}\n\n"
+                            f"Error: {str(copy_error)}"
+                        )
+        
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"An error occurred while preparing to save the photo copy:\n\n{str(e)}"
+            )
+    
     def delete_photo(self, photo_id: int):
         """Delete a photo from the catalog."""
         try:
@@ -1757,8 +1878,8 @@ class PhotoSphereMainWindow(QMainWindow):
             # Ask for confirmation
             reply = QMessageBox.question(
                 self,
-                "Delete Photo",
-                f"Are you sure you want to delete '{photo['filename']}' from the catalog?\n\n"
+                "Remove Photo",
+                f"Are you sure you want to remove '{photo['filename']}' from the catalog?\n\n"
                 "Note: This will only remove the photo from PhotoSphere catalog, "
                 "not from your computer.",
                 QMessageBox.Yes | QMessageBox.No,
