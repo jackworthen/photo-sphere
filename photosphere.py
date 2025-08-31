@@ -15,10 +15,11 @@ from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QFormLayout, QMessageBox,
     QProgressBar, QStatusBar, QMenuBar, QMenu, QFileDialog,
     QGroupBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QAbstractItemView
+    QHeaderView, QAbstractItemView, QComboBox, QLineEdit,
+    QCheckBox, QColorDialog
 )
 from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QPoint
-from PySide6.QtGui import QPixmap, QIcon, QDragEnterEvent, QDropEvent, QAction, QTransform
+from PySide6.QtGui import QPixmap, QIcon, QDragEnterEvent, QDropEvent, QAction, QTransform, QColor
 
 from PIL import Image
 from PIL.ExifTags import TAGS
@@ -128,6 +129,28 @@ class DatabaseManager:
                 )
             ''')
             
+            # Tags table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS tags (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    color TEXT DEFAULT '#3498db',
+                    created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Photo-Tags junction table (many-to-many relationship)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS photo_tags (
+                    photo_id INTEGER,
+                    tag_id INTEGER,
+                    assigned_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (photo_id, tag_id),
+                    FOREIGN KEY (photo_id) REFERENCES photos (id) ON DELETE CASCADE,
+                    FOREIGN KEY (tag_id) REFERENCES tags (id) ON DELETE CASCADE
+                )
+            ''')
+            
             # Thumbnail cache table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS thumbnail_cache (
@@ -164,7 +187,10 @@ class DatabaseManager:
                 "CREATE INDEX IF NOT EXISTS idx_photos_date_taken ON photos(date_taken)",
                 "CREATE INDEX IF NOT EXISTS idx_photos_filename ON photos(filename)",
                 "CREATE INDEX IF NOT EXISTS idx_photos_filepath ON photos(filepath)",
-                "CREATE INDEX IF NOT EXISTS idx_thumbnail_cache_photo_id ON thumbnail_cache(photo_id)"
+                "CREATE INDEX IF NOT EXISTS idx_thumbnail_cache_photo_id ON thumbnail_cache(photo_id)",
+                "CREATE INDEX IF NOT EXISTS idx_photo_tags_photo_id ON photo_tags(photo_id)",
+                "CREATE INDEX IF NOT EXISTS idx_photo_tags_tag_id ON photo_tags(tag_id)",
+                "CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name)"
             ]
             
             for index_sql in indexes:
@@ -349,27 +375,61 @@ class DatabaseManager:
         
         return info
     
-    def get_photos(self, limit: Optional[int] = None, offset: int = 0) -> List[Dict]:
-        """Retrieve photos with optional pagination."""
+    def get_photos(self, limit: Optional[int] = None, offset: int = 0, tag_filter: str = None) -> List[Dict]:
+        """Retrieve photos with optional pagination and tag filtering."""
         with sqlite3.connect(str(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
-            if limit:
-                cursor.execute(
-                    "SELECT * FROM photos ORDER BY date_added DESC LIMIT ? OFFSET ?",
-                    (limit, offset)
-                )
-            else:
-                cursor.execute("SELECT * FROM photos ORDER BY date_added DESC")
+            base_query = "SELECT DISTINCT p.* FROM photos p"
+            where_clause = ""
+            params = []
             
+            if tag_filter == "Untagged":
+                # Show photos with no tags
+                base_query += " LEFT JOIN photo_tags pt ON p.id = pt.photo_id"
+                where_clause = " WHERE pt.photo_id IS NULL"
+            elif tag_filter and tag_filter != "All":
+                # Show photos with specific tag
+                base_query += " INNER JOIN photo_tags pt ON p.id = pt.photo_id INNER JOIN tags t ON pt.tag_id = t.id"
+                where_clause = " WHERE t.name = ?"
+                params.append(tag_filter)
+            
+            order_clause = " ORDER BY p.date_added DESC"
+            
+            if limit:
+                limit_clause = " LIMIT ? OFFSET ?"
+                params.extend([limit, offset])
+                query = base_query + where_clause + order_clause + limit_clause
+            else:
+                query = base_query + where_clause + order_clause
+            
+            cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
     
-    def get_total_photo_count(self) -> int:
-        """Get total number of photos."""
+    def get_total_photo_count(self, tag_filter: str = None) -> int:
+        """Get total number of photos with optional tag filtering."""
         with sqlite3.connect(str(self.db_path)) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM photos")
+            
+            if tag_filter == "Untagged":
+                cursor.execute('''
+                    SELECT COUNT(DISTINCT p.id) 
+                    FROM photos p 
+                    LEFT JOIN photo_tags pt ON p.id = pt.photo_id 
+                    WHERE pt.photo_id IS NULL
+                ''')
+            elif tag_filter and tag_filter != "All":
+                cursor.execute('''
+                    SELECT COUNT(DISTINCT p.id) 
+                    FROM photos p 
+                    INNER JOIN photo_tags pt ON p.id = pt.photo_id 
+                    INNER JOIN tags t ON pt.tag_id = t.id 
+                    WHERE t.name = ?
+                ''', (tag_filter,))
+            else:
+                cursor.execute("SELECT COUNT(*) FROM photos")
+            
             return cursor.fetchone()[0]
     
     def delete_photo(self, photo_id: int) -> bool:
@@ -389,7 +449,7 @@ class DatabaseManager:
                     except Exception as e:
                         print(f"Error deleting thumbnail file: {e}")
                 
-                # Delete from photos table (thumbnail_cache will cascade delete)
+                # Delete from photos table (thumbnail_cache and photo_tags will cascade delete)
                 cursor.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
                 success = cursor.rowcount > 0
                 
@@ -408,6 +468,401 @@ class DatabaseManager:
             cursor.execute("SELECT * FROM photos WHERE id = ?", (photo_id,))
             result = cursor.fetchone()
             return dict(result) if result else None
+    
+    # Tag management methods
+    def create_tag(self, name: str, color: str = '#3498db') -> int:
+        """Create a new tag."""
+        with sqlite3.connect(str(self.db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO tags (name, color) VALUES (?, ?)", (name, color))
+            return cursor.lastrowid
+    
+    def get_all_tags(self) -> List[Dict]:
+        """Get all tags."""
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM tags ORDER BY name")
+            return [dict(row) for row in cursor.fetchall()]
+    
+    def update_tag(self, tag_id: int, name: str, color: str) -> bool:
+        """Update a tag."""
+        with sqlite3.connect(str(self.db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE tags SET name = ?, color = ? WHERE id = ?", (name, color, tag_id))
+            return cursor.rowcount > 0
+    
+    def delete_tag(self, tag_id: int) -> bool:
+        """Delete a tag and all its associations."""
+        with sqlite3.connect(str(self.db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
+            return cursor.rowcount > 0
+    
+    def get_photo_tags(self, photo_id: int) -> List[Dict]:
+        """Get all tags for a specific photo."""
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT t.* FROM tags t 
+                INNER JOIN photo_tags pt ON t.id = pt.tag_id 
+                WHERE pt.photo_id = ? 
+                ORDER BY t.name
+            ''', (photo_id,))
+            return [dict(row) for row in cursor.fetchall()]
+    
+    def assign_tag_to_photo(self, photo_id: int, tag_id: int) -> bool:
+        """Assign a tag to a photo."""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                cursor = conn.cursor()
+                cursor.execute("INSERT OR IGNORE INTO photo_tags (photo_id, tag_id) VALUES (?, ?)", (photo_id, tag_id))
+                return True
+        except:
+            return False
+    
+    def remove_tag_from_photo(self, photo_id: int, tag_id: int) -> bool:
+        """Remove a tag from a photo."""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM photo_tags WHERE photo_id = ? AND tag_id = ?", (photo_id, tag_id))
+                return cursor.rowcount > 0
+        except:
+            return False
+    
+    def set_photo_tags(self, photo_id: int, tag_ids: List[int]) -> bool:
+        """Set all tags for a photo (replaces existing tags)."""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                cursor = conn.cursor()
+                # Remove existing tags
+                cursor.execute("DELETE FROM photo_tags WHERE photo_id = ?", (photo_id,))
+                # Add new tags
+                for tag_id in tag_ids:
+                    cursor.execute("INSERT INTO photo_tags (photo_id, tag_id) VALUES (?, ?)", (photo_id, tag_id))
+                conn.commit()
+                return True
+        except Exception as e:
+            print(f"Error setting photo tags: {e}")
+            return False
+
+
+class TagManagementDialog(QDialog):
+    """Dialog for managing tags (create, edit, delete)."""
+    
+    def __init__(self, db_manager: DatabaseManager, parent=None):
+        super().__init__(parent)
+        self.db_manager = db_manager
+        self.setWindowTitle("Manage Tags")
+        self.setModal(True)
+        self.setup_ui()
+        self.load_tags()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Create new tag section
+        new_tag_group = QGroupBox("Create New Tag")
+        new_tag_layout = QHBoxLayout(new_tag_group)
+        
+        self.tag_name_input = QLineEdit()
+        self.tag_name_input.setPlaceholderText("Enter tag name...")
+        new_tag_layout.addWidget(QLabel("Name:"))
+        new_tag_layout.addWidget(self.tag_name_input)
+        
+        self.color_button = QPushButton()
+        self.color_button.setFixedSize(30, 30)
+        self.selected_color = '#3498db'
+        self.color_button.setStyleSheet(f"background-color: {self.selected_color}; border: 1px solid #ccc;")
+        self.color_button.clicked.connect(self.choose_color)
+        new_tag_layout.addWidget(QLabel("Color:"))
+        new_tag_layout.addWidget(self.color_button)
+        
+        create_button = QPushButton("Create Tag")
+        create_button.clicked.connect(self.create_tag)
+        new_tag_layout.addWidget(create_button)
+        
+        layout.addWidget(new_tag_group)
+        
+        # Existing tags section
+        existing_tags_group = QGroupBox("Existing Tags")
+        existing_layout = QVBoxLayout(existing_tags_group)
+        
+        self.tags_table = QTableWidget()
+        self.tags_table.setColumnCount(4)
+        self.tags_table.setHorizontalHeaderLabels(["Name", "Color", "Edit", "Delete"])
+        self.tags_table.horizontalHeader().setStretchLastSection(True)
+        self.tags_table.verticalHeader().hide()
+        existing_layout.addWidget(self.tags_table)
+        
+        layout.addWidget(existing_tags_group)
+        
+        # Close button
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.accept)
+        button_layout.addWidget(close_button)
+        layout.addLayout(button_layout)
+        
+        self.resize(500, 400)
+    
+    def choose_color(self):
+        """Open color picker dialog."""
+        color = QColorDialog.getColor(QColor(self.selected_color), self)
+        if color.isValid():
+            self.selected_color = color.name()
+            self.color_button.setStyleSheet(f"background-color: {self.selected_color}; border: 1px solid #ccc;")
+    
+    def create_tag(self):
+        """Create a new tag."""
+        name = self.tag_name_input.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Error", "Please enter a tag name.")
+            return
+        
+        try:
+            self.db_manager.create_tag(name, self.selected_color)
+            self.tag_name_input.clear()
+            self.selected_color = '#3498db'
+            self.color_button.setStyleSheet(f"background-color: {self.selected_color}; border: 1px solid #ccc;")
+            self.load_tags()
+            QMessageBox.information(self, "Success", f"Tag '{name}' created successfully.")
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to create tag: {str(e)}")
+    
+    def load_tags(self):
+        """Load existing tags into the table."""
+        tags = self.db_manager.get_all_tags()
+        self.tags_table.setRowCount(len(tags))
+        
+        for i, tag in enumerate(tags):
+            # Name
+            self.tags_table.setItem(i, 0, QTableWidgetItem(tag['name']))
+            
+            # Color
+            color_item = QTableWidgetItem()
+            color_item.setBackground(QColor(tag['color']))
+            color_item.setText(tag['color'])
+            self.tags_table.setItem(i, 1, color_item)
+            
+            # Edit button
+            edit_button = QPushButton("Edit")
+            edit_button.clicked.connect(lambda checked, tag_id=tag['id']: self.edit_tag(tag_id))
+            self.tags_table.setCellWidget(i, 2, edit_button)
+            
+            # Delete button
+            delete_button = QPushButton("Delete")
+            delete_button.clicked.connect(lambda checked, tag_id=tag['id'], tag_name=tag['name']: self.delete_tag(tag_id, tag_name))
+            self.tags_table.setCellWidget(i, 3, delete_button)
+    
+    def edit_tag(self, tag_id: int):
+        """Edit an existing tag."""
+        # Find the tag in the current list
+        tags = self.db_manager.get_all_tags()
+        tag = next((t for t in tags if t['id'] == tag_id), None)
+        if not tag:
+            return
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Edit Tag")
+        layout = QVBoxLayout(dialog)
+        
+        form_layout = QFormLayout()
+        name_input = QLineEdit(tag['name'])
+        form_layout.addRow("Name:", name_input)
+        
+        color_button = QPushButton()
+        color_button.setFixedSize(30, 30)
+        selected_color = tag['color']
+        color_button.setStyleSheet(f"background-color: {selected_color}; border: 1px solid #ccc;")
+        
+        def choose_edit_color():
+            nonlocal selected_color
+            color = QColorDialog.getColor(QColor(selected_color), dialog)
+            if color.isValid():
+                selected_color = color.name()
+                color_button.setStyleSheet(f"background-color: {selected_color}; border: 1px solid #ccc;")
+        
+        color_button.clicked.connect(choose_edit_color)
+        form_layout.addRow("Color:", color_button)
+        layout.addLayout(form_layout)
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        
+        if dialog.exec() == QDialog.Accepted:
+            new_name = name_input.text().strip()
+            if new_name:
+                try:
+                    self.db_manager.update_tag(tag_id, new_name, selected_color)
+                    self.load_tags()
+                    QMessageBox.information(self, "Success", f"Tag updated successfully.")
+                except Exception as e:
+                    QMessageBox.warning(self, "Error", f"Failed to update tag: {str(e)}")
+    
+    def delete_tag(self, tag_id: int, tag_name: str):
+        """Delete a tag."""
+        reply = QMessageBox.question(
+            self,
+            "Delete Tag",
+            f"Are you sure you want to delete the tag '{tag_name}'?\n\n"
+            "This will remove the tag from all photos.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            try:
+                self.db_manager.delete_tag(tag_id)
+                self.load_tags()
+                QMessageBox.information(self, "Success", f"Tag '{tag_name}' deleted successfully.")
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Failed to delete tag: {str(e)}")
+
+
+class TagAssignmentDialog(QDialog):
+    """Dialog for assigning tags to a photo."""
+    
+    def __init__(self, db_manager: DatabaseManager, photo_id: int, photo_name: str, parent=None):
+        super().__init__(parent)
+        self.db_manager = db_manager
+        self.photo_id = photo_id
+        self.setWindowTitle(f"Assign Tags - {photo_name}")
+        self.setModal(True)
+        self.setup_ui()
+        self.load_tags()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        info_label = QLabel("Select tags to assign to this photo:")
+        layout.addWidget(info_label)
+        
+        # Tags list with checkboxes
+        self.tags_widget = QWidget()
+        self.tags_layout = QVBoxLayout(self.tags_widget)
+        
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(self.tags_widget)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setMaximumHeight(300)
+        layout.addWidget(scroll_area)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        create_tag_button = QPushButton("Create New Tag")
+        create_tag_button.clicked.connect(self.create_new_tag)
+        button_layout.addWidget(create_tag_button)
+        
+        button_layout.addStretch()
+        
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_button)
+        
+        save_button = QPushButton("Save")
+        save_button.clicked.connect(self.save_tags)
+        button_layout.addWidget(save_button)
+        
+        layout.addLayout(button_layout)
+        
+        self.resize(400, 350)
+    
+    def load_tags(self):
+        """Load all tags and show current assignments."""
+        # Clear existing checkboxes
+        for i in reversed(range(self.tags_layout.count())):
+            self.tags_layout.itemAt(i).widget().setParent(None)
+        
+        all_tags = self.db_manager.get_all_tags()
+        photo_tags = self.db_manager.get_photo_tags(self.photo_id)
+        photo_tag_ids = [tag['id'] for tag in photo_tags]
+        
+        self.tag_checkboxes = {}
+        
+        for tag in all_tags:
+            checkbox = QCheckBox(tag['name'])
+            checkbox.setChecked(tag['id'] in photo_tag_ids)
+            
+            # Add color indicator
+            checkbox.setStyleSheet(f"""
+                QCheckBox::indicator:checked {{
+                    background-color: {tag['color']};
+                    border: 2px solid #333;
+                }}
+                QCheckBox::indicator:unchecked {{
+                    background-color: white;
+                    border: 2px solid {tag['color']};
+                }}
+            """)
+            
+            self.tag_checkboxes[tag['id']] = checkbox
+            self.tags_layout.addWidget(checkbox)
+        
+        if not all_tags:
+            no_tags_label = QLabel("No tags available. Create some tags first.")
+            no_tags_label.setStyleSheet("color: gray; font-style: italic;")
+            self.tags_layout.addWidget(no_tags_label)
+    
+    def create_new_tag(self):
+        """Open tag creation dialog."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Create New Tag")
+        layout = QVBoxLayout(dialog)
+        
+        form_layout = QFormLayout()
+        name_input = QLineEdit()
+        name_input.setPlaceholderText("Enter tag name...")
+        form_layout.addRow("Name:", name_input)
+        
+        color_button = QPushButton()
+        color_button.setFixedSize(30, 30)
+        selected_color = '#3498db'
+        color_button.setStyleSheet(f"background-color: {selected_color}; border: 1px solid #ccc;")
+        
+        def choose_color():
+            nonlocal selected_color
+            color = QColorDialog.getColor(QColor(selected_color), dialog)
+            if color.isValid():
+                selected_color = color.name()
+                color_button.setStyleSheet(f"background-color: {selected_color}; border: 1px solid #ccc;")
+        
+        color_button.clicked.connect(choose_color)
+        form_layout.addRow("Color:", color_button)
+        layout.addLayout(form_layout)
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        
+        if dialog.exec() == QDialog.Accepted:
+            name = name_input.text().strip()
+            if name:
+                try:
+                    self.db_manager.create_tag(name, selected_color)
+                    self.load_tags()  # Refresh the tag list
+                    QMessageBox.information(self, "Success", f"Tag '{name}' created successfully.")
+                except Exception as e:
+                    QMessageBox.warning(self, "Error", f"Failed to create tag: {str(e)}")
+    
+    def save_tags(self):
+        """Save tag assignments."""
+        selected_tag_ids = []
+        for tag_id, checkbox in self.tag_checkboxes.items():
+            if checkbox.isChecked():
+                selected_tag_ids.append(tag_id)
+        
+        if self.db_manager.set_photo_tags(self.photo_id, selected_tag_ids):
+            self.accept()
+        else:
+            QMessageBox.warning(self, "Error", "Failed to save tag assignments.")
 
 
 class ThumbnailWorker(QThread):
@@ -990,6 +1445,7 @@ class PhotoListWidget(QListWidget):
     photo_delete_requested = Signal(int)  # Signal emitted when photo deletion is requested
     photo_open_requested = Signal(str)    # Signal emitted when photo should be opened in default viewer
     photo_save_copy_requested = Signal(str)  # Signal emitted when photo copy is requested (filepath)
+    photo_assign_tags_requested = Signal(int, str)  # Signal emitted when tag assignment is requested (photo_id, photo_name)
     
     def __init__(self, db_manager: DatabaseManager):
         super().__init__()
@@ -1184,10 +1640,19 @@ class PhotoListWidget(QListWidget):
         open_action.triggered.connect(lambda: self.photo_open_requested.emit(photo_data['filepath']))
         menu.addAction(open_action)
         
-        # Add the new Save Copy action
+        # Add the Save Copy action
         save_copy_action = QAction("Save Copy", self)
         save_copy_action.triggered.connect(lambda: self.photo_save_copy_requested.emit(photo_data['filepath']))
         menu.addAction(save_copy_action)
+        
+        menu.addSeparator()
+        
+        # Add the Assign Tags action
+        assign_tags_action = QAction("Assign Tags", self)
+        assign_tags_action.triggered.connect(
+            lambda: self.photo_assign_tags_requested.emit(photo_data['id'], photo_data['filename'])
+        )
+        menu.addAction(assign_tags_action)
         
         menu.addSeparator()
         
@@ -1344,6 +1809,7 @@ class PhotoSphereMainWindow(QMainWindow):
         super().__init__()
         self.db_manager = DatabaseManager()
         self.current_photos = []
+        self.current_tag_filter = "All"
         self.setup_ui()
         
         # Show window immediately, load data afterward
@@ -1412,13 +1878,21 @@ class PhotoSphereMainWindow(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         
-        # Toolbar with import button and photo count
+        # Toolbar with import button, tag filter, and photo count
         toolbar_layout = QHBoxLayout()
         
         # Import button
         import_btn = QPushButton("Import Photos")
         import_btn.clicked.connect(self.import_photos_dialog)
         toolbar_layout.addWidget(import_btn)
+        
+        # Tag filter dropdown
+        filter_label = QLabel("Filter by Tag:")
+        toolbar_layout.addWidget(filter_label)
+        
+        self.tag_filter_combo = QComboBox()
+        self.tag_filter_combo.currentTextChanged.connect(self.on_tag_filter_changed)
+        toolbar_layout.addWidget(self.tag_filter_combo)
         
         # Spacer
         toolbar_layout.addStretch()
@@ -1435,6 +1909,7 @@ class PhotoSphereMainWindow(QMainWindow):
         self.photo_list.photo_delete_requested.connect(self.delete_photo)
         self.photo_list.photo_open_requested.connect(self.open_photo_in_default_viewer)
         self.photo_list.photo_save_copy_requested.connect(self.save_photo_copy)
+        self.photo_list.photo_assign_tags_requested.connect(self.assign_tags_to_photo)
         layout.addWidget(self.photo_list)
         
         return panel
@@ -1497,6 +1972,13 @@ class PhotoSphereMainWindow(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
         
+        # Tags menu
+        tags_menu = menubar.addMenu("Tags")
+        
+        manage_tags_action = QAction("Manage Tags", self)
+        manage_tags_action.triggered.connect(self.manage_tags)
+        tags_menu.addAction(manage_tags_action)
+        
         # Help menu
         help_menu = menubar.addMenu("Help")
         
@@ -1515,11 +1997,48 @@ class PhotoSphereMainWindow(QMainWindow):
         # Clean up orphaned thumbnails on startup (in background)
         QTimer.singleShot(1000, self.db_manager.cleanup_orphaned_thumbnails)
         
+        # Load tag filter options
+        self.load_tag_filter_options()
+        
         # Load photo metadata without thumbnails for fast startup
         self.load_photos_metadata_only()
         
         # Start loading visible thumbnails after a short delay
         QTimer.singleShot(200, self.photo_list.load_visible_thumbnails)
+    
+    def load_tag_filter_options(self):
+        """Load tag filter dropdown options."""
+        try:
+            # Clear existing items
+            self.tag_filter_combo.clear()
+            
+            # Add standard options
+            self.tag_filter_combo.addItem("All")
+            self.tag_filter_combo.addItem("Untagged")
+            
+            # Add separator
+            self.tag_filter_combo.insertSeparator(2)
+            
+            # Add all tags
+            tags = self.db_manager.get_all_tags()
+            for tag in tags:
+                self.tag_filter_combo.addItem(tag['name'])
+            
+            # Set default selection
+            self.tag_filter_combo.setCurrentText("All")
+            
+        except Exception as e:
+            print(f"Error loading tag filter options: {e}")
+    
+    def on_tag_filter_changed(self, tag_name: str):
+        """Handle tag filter change."""
+        if tag_name == "":  # Ignore empty selections
+            return
+            
+        self.current_tag_filter = tag_name
+        self.load_photos_metadata_only()
+        # Start loading visible thumbnails after a short delay
+        QTimer.singleShot(100, self.photo_list.load_visible_thumbnails)
     
     def load_photos_metadata_only(self):
         """Load photo metadata without thumbnails for fast startup."""
@@ -1527,7 +2046,9 @@ class PhotoSphereMainWindow(QMainWindow):
             self.photo_list.clear_thumbnails()
             self.photo_list.clear()
             
-            self.current_photos = self.db_manager.get_photos()
+            # Apply current tag filter
+            tag_filter = None if self.current_tag_filter == "All" else self.current_tag_filter
+            self.current_photos = self.db_manager.get_photos(tag_filter=tag_filter)
             
             for photo in self.current_photos:
                 item = QListWidgetItem()
@@ -1539,13 +2060,20 @@ class PhotoSphereMainWindow(QMainWindow):
                 
                 self.photo_list.addItem(item)
             
-            self.photo_count_label.setText(f"{len(self.current_photos)} photos")
+            # Update photo count with filter info
+            total_count = len(self.current_photos)
+            if self.current_tag_filter == "All":
+                self.photo_count_label.setText(f"{total_count} photos")
+            else:
+                self.photo_count_label.setText(f"{total_count} photos ({self.current_tag_filter})")
             
             # Update status
             if len(self.current_photos) > 0:
-                self.status_bar.showMessage("Photos loaded - thumbnails loading in background", 3000)
+                filter_status = f" (filtered by '{self.current_tag_filter}')" if self.current_tag_filter != "All" else ""
+                self.status_bar.showMessage(f"Photos loaded{filter_status} - thumbnails loading in background", 3000)
             else:
-                self.status_bar.showMessage("No photos in catalog", 3000)
+                filter_status = f" matching '{self.current_tag_filter}'" if self.current_tag_filter != "All" else ""
+                self.status_bar.showMessage(f"No photos{filter_status} in catalog", 3000)
                 
         except Exception as e:
             print(f"Error loading photos: {e}")
@@ -1562,6 +2090,32 @@ class PhotoSphereMainWindow(QMainWindow):
         """Show the database information dialog."""
         dialog = DatabaseInfoDialog(self.db_manager, self)
         dialog.exec()
+    
+    def manage_tags(self):
+        """Show the tag management dialog."""
+        dialog = TagManagementDialog(self.db_manager, self)
+        if dialog.exec() == QDialog.Accepted:
+            # Refresh tag filter options after tag management
+            self.load_tag_filter_options()
+            # Refresh photo list if we're viewing details (tags might have changed)
+            if hasattr(self, 'current_selected_photo'):
+                self.show_photo_details(self.current_selected_photo)
+    
+    def assign_tags_to_photo(self, photo_id: int, photo_name: str):
+        """Show tag assignment dialog for a photo."""
+        dialog = TagAssignmentDialog(self.db_manager, photo_id, photo_name, self)
+        if dialog.exec() == QDialog.Accepted:
+            # Refresh the current view if needed
+            if self.current_tag_filter != "All":
+                self.load_photos_metadata_only()
+                QTimer.singleShot(100, self.photo_list.load_visible_thumbnails)
+            
+            # Refresh photo details if this photo is currently selected
+            if hasattr(self, 'current_selected_photo') and self.current_selected_photo.get('id') == photo_id:
+                updated_photo = self.db_manager.get_photo_by_id(photo_id)
+                if updated_photo:
+                    self.current_selected_photo = updated_photo
+                    self.show_photo_details(updated_photo)
     
     def open_documentation(self):
         """Open the documentation URL in the default browser."""
@@ -1583,13 +2137,15 @@ class PhotoSphereMainWindow(QMainWindow):
         
         about_text = f"""
         <h3>PhotoSphere</h3>
-        <p><b>Version:</b> 1.1 (Performance Optimized)</p>
-        <p><b>Description:</b> A robust application for organizing and cataloging photography with metadata extraction.</p>
+        <p><b>Version:</b> 1.2 (Tag System)</p>
+        <p><b>Description:</b> A robust application for organizing and cataloging photography with metadata extraction and tagging system.</p>
         
         <p><b>Features:</b></p>
         <ul>
         <li>Import photos with automatic metadata extraction</li>
         <li>EXIF data parsing including GPS coordinates</li>
+        <li>Tag management and photo categorization</li>
+        <li>Filter photos by tags</li>
         <li>Cross-platform database storage</li>
         <li>Drag & drop photo import</li>
         <li>Photo preview with proper orientation handling</li>
@@ -1631,6 +2187,7 @@ class PhotoSphereMainWindow(QMainWindow):
         """Handle photo selection to show details."""
         photo = item.data(Qt.UserRole)
         if photo:
+            self.current_selected_photo = photo  # Store for refresh purposes
             self.show_photo_details(photo)
             # Ensure thumbnail is loaded for selected photo
             self.photo_list.load_thumbnail_for_item(item)
@@ -1684,8 +2241,20 @@ class PhotoSphereMainWindow(QMainWindow):
                 return value.strip() != "" and value.strip().lower() != "none"
             return True
         
-        # Update details table
-        details = [
+        # Get tags for this photo
+        photo_tags = self.db_manager.get_photo_tags(photo['id'])
+        
+        # Build details list starting with tags
+        details = []
+        
+        # Add tags at the top if they exist
+        if photo_tags:
+            tag_names = [tag['name'] for tag in photo_tags]
+            tag_display = ", ".join(tag_names)
+            details.append(("Tags", tag_display))
+        
+        # Add other photo details
+        details.extend([
             ("Filename", photo.get('filename', '')),
             ("File Size", f"{photo.get('file_size', 0) / (1024 * 1024):.2f} MB" if photo.get('file_size') else ''),
             ("Dimensions", f"{photo.get('width', '')} × {photo.get('height', '')}" if photo.get('width') else ''),
@@ -1697,7 +2266,7 @@ class PhotoSphereMainWindow(QMainWindow):
             ("Aperture", f"f/{photo.get('aperture', '')}" if photo.get('aperture') else ''),
             ("Shutter Speed", photo.get('shutter_speed', '')),
             ("ISO", photo.get('iso', '')),
-        ]
+        ])
         
         # Filter out empty values
         details = [(prop, value) for prop, value in details if should_show_value(value)]
@@ -1905,7 +2474,7 @@ class PhotoSphereMainWindow(QMainWindow):
             if reply == QMessageBox.Yes:
                 # Delete from database
                 if self.db_manager.delete_photo(photo_id):
-                    self.status_bar.showMessage(f"Deleted: {photo['filename']}", 3000)
+                    self.status_bar.showMessage(f"Removed: {photo['filename']}", 3000)
                     # Reload the photo list
                     self.load_photos_metadata_only()
                     # Start loading visible thumbnails
@@ -1915,10 +2484,10 @@ class PhotoSphereMainWindow(QMainWindow):
                     self.photo_preview.setText("Select a photo to view details")
                     self.details_table.setRowCount(0)
                 else:
-                    QMessageBox.warning(self, "Error", "Failed to delete photo from database.")
+                    QMessageBox.warning(self, "Error", "Failed to remove photo from database.")
         
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"An error occurred while deleting the photo: {str(e)}")
+            QMessageBox.critical(self, "Error", f"An error occurred while removing the photo: {str(e)}")
     
     def open_photo_in_default_viewer(self, file_path: str):
         """Open a photo in the system's default image viewer."""
@@ -2041,6 +2610,9 @@ class PhotoSphereMainWindow(QMainWindow):
     def on_import_finished(self):
         """Handle import completion."""
         self.progress_bar.hide()
+        # Refresh tag filter options (in case we need to update counts)
+        self.load_tag_filter_options()
+        # Reload photos
         self.load_photos_metadata_only()
         # Start loading visible thumbnails
         QTimer.singleShot(100, self.photo_list.load_visible_thumbnails)
@@ -2052,7 +2624,7 @@ def main():
     """Main application entry point."""
     app = QApplication(sys.argv)
     app.setApplicationName("PhotoSphere")
-    app.setApplicationVersion("1.1")
+    app.setApplicationVersion("1.2")
     
     # Set application icon for taskbar, alt-tab, etc.
     try:
