@@ -2094,17 +2094,23 @@ class PhotoSphereMainWindow(QMainWindow):
     def manage_tags(self):
         """Show the tag management dialog."""
         dialog = TagManagementDialog(self.db_manager, self)
-        if dialog.exec() == QDialog.Accepted:
-            # Refresh tag filter options after tag management
-            self.load_tag_filter_options()
-            # Refresh photo list if we're viewing details (tags might have changed)
-            if hasattr(self, 'current_selected_photo'):
-                self.show_photo_details(self.current_selected_photo)
+        dialog.exec()
+        
+        # Always refresh tag filter options after tag management dialog closes
+        # (user might have created/edited/deleted tags)
+        self.load_tag_filter_options()
+        
+        # Refresh photo list if we're viewing details (tags might have changed)
+        if hasattr(self, 'current_selected_photo'):
+            self.show_photo_details(self.current_selected_photo)
     
     def assign_tags_to_photo(self, photo_id: int, photo_name: str):
         """Show tag assignment dialog for a photo."""
         dialog = TagAssignmentDialog(self.db_manager, photo_id, photo_name, self)
         if dialog.exec() == QDialog.Accepted:
+            # Always refresh tag filter options (user might have created new tags)
+            self.load_tag_filter_options()
+            
             # Refresh the current view if needed
             if self.current_tag_filter != "All":
                 self.load_photos_metadata_only()
