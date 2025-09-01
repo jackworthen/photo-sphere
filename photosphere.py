@@ -16,10 +16,10 @@ from PySide6.QtWidgets import (
     QProgressBar, QStatusBar, QMenuBar, QMenu, QFileDialog,
     QGroupBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QComboBox, QLineEdit,
-    QCheckBox, QColorDialog
+    QCheckBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QPoint
-from PySide6.QtGui import QPixmap, QIcon, QDragEnterEvent, QDropEvent, QAction, QTransform, QColor
+from PySide6.QtGui import QPixmap, QIcon, QDragEnterEvent, QDropEvent, QAction, QTransform
 
 from PIL import Image
 from PIL.ExifTags import TAGS
@@ -572,14 +572,6 @@ class TagManagementDialog(QDialog):
         new_tag_layout.addWidget(QLabel("Name:"))
         new_tag_layout.addWidget(self.tag_name_input)
         
-        self.color_button = QPushButton()
-        self.color_button.setFixedSize(30, 30)
-        self.selected_color = '#3498db'
-        self.color_button.setStyleSheet(f"background-color: {self.selected_color}; border: 1px solid #ccc;")
-        self.color_button.clicked.connect(self.choose_color)
-        new_tag_layout.addWidget(QLabel("Color:"))
-        new_tag_layout.addWidget(self.color_button)
-        
         create_button = QPushButton("Create Tag")
         create_button.clicked.connect(self.create_tag)
         new_tag_layout.addWidget(create_button)
@@ -591,8 +583,8 @@ class TagManagementDialog(QDialog):
         existing_layout = QVBoxLayout(existing_tags_group)
         
         self.tags_table = QTableWidget()
-        self.tags_table.setColumnCount(4)
-        self.tags_table.setHorizontalHeaderLabels(["Name", "Color", "Edit", "Delete"])
+        self.tags_table.setColumnCount(3)
+        self.tags_table.setHorizontalHeaderLabels(["Name", "Edit", "Delete"])
         self.tags_table.horizontalHeader().setStretchLastSection(True)
         self.tags_table.verticalHeader().hide()
         existing_layout.addWidget(self.tags_table)
@@ -609,13 +601,6 @@ class TagManagementDialog(QDialog):
         
         self.resize(500, 400)
     
-    def choose_color(self):
-        """Open color picker dialog."""
-        color = QColorDialog.getColor(QColor(self.selected_color), self)
-        if color.isValid():
-            self.selected_color = color.name()
-            self.color_button.setStyleSheet(f"background-color: {self.selected_color}; border: 1px solid #ccc;")
-    
     def create_tag(self):
         """Create a new tag."""
         name = self.tag_name_input.text().strip()
@@ -624,10 +609,8 @@ class TagManagementDialog(QDialog):
             return
         
         try:
-            self.db_manager.create_tag(name, self.selected_color)
+            self.db_manager.create_tag(name)
             self.tag_name_input.clear()
-            self.selected_color = '#3498db'
-            self.color_button.setStyleSheet(f"background-color: {self.selected_color}; border: 1px solid #ccc;")
             self.load_tags()
             QMessageBox.information(self, "Success", f"Tag '{name}' created successfully.")
         except Exception as e:
@@ -642,21 +625,15 @@ class TagManagementDialog(QDialog):
             # Name
             self.tags_table.setItem(i, 0, QTableWidgetItem(tag['name']))
             
-            # Color
-            color_item = QTableWidgetItem()
-            color_item.setBackground(QColor(tag['color']))
-            color_item.setText(tag['color'])
-            self.tags_table.setItem(i, 1, color_item)
-            
             # Edit button
             edit_button = QPushButton("Edit")
             edit_button.clicked.connect(lambda checked, tag_id=tag['id']: self.edit_tag(tag_id))
-            self.tags_table.setCellWidget(i, 2, edit_button)
+            self.tags_table.setCellWidget(i, 1, edit_button)
             
             # Delete button
             delete_button = QPushButton("Delete")
             delete_button.clicked.connect(lambda checked, tag_id=tag['id'], tag_name=tag['name']: self.delete_tag(tag_id, tag_name))
-            self.tags_table.setCellWidget(i, 3, delete_button)
+            self.tags_table.setCellWidget(i, 2, delete_button)
     
     def edit_tag(self, tag_id: int):
         """Edit an existing tag."""
@@ -673,21 +650,6 @@ class TagManagementDialog(QDialog):
         form_layout = QFormLayout()
         name_input = QLineEdit(tag['name'])
         form_layout.addRow("Name:", name_input)
-        
-        color_button = QPushButton()
-        color_button.setFixedSize(30, 30)
-        selected_color = tag['color']
-        color_button.setStyleSheet(f"background-color: {selected_color}; border: 1px solid #ccc;")
-        
-        def choose_edit_color():
-            nonlocal selected_color
-            color = QColorDialog.getColor(QColor(selected_color), dialog)
-            if color.isValid():
-                selected_color = color.name()
-                color_button.setStyleSheet(f"background-color: {selected_color}; border: 1px solid #ccc;")
-        
-        color_button.clicked.connect(choose_edit_color)
-        form_layout.addRow("Color:", color_button)
         layout.addLayout(form_layout)
         
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -699,7 +661,9 @@ class TagManagementDialog(QDialog):
             new_name = name_input.text().strip()
             if new_name:
                 try:
-                    self.db_manager.update_tag(tag_id, new_name, selected_color)
+                    # Use existing color or default
+                    existing_color = tag.get('color', '#3498db')
+                    self.db_manager.update_tag(tag_id, new_name, existing_color)
                     self.load_tags()
                     QMessageBox.information(self, "Success", f"Tag updated successfully.")
                 except Exception as e:
@@ -790,18 +754,6 @@ class TagAssignmentDialog(QDialog):
             checkbox = QCheckBox(tag['name'])
             checkbox.setChecked(tag['id'] in photo_tag_ids)
             
-            # Add color indicator
-            checkbox.setStyleSheet(f"""
-                QCheckBox::indicator:checked {{
-                    background-color: {tag['color']};
-                    border: 2px solid #333;
-                }}
-                QCheckBox::indicator:unchecked {{
-                    background-color: white;
-                    border: 2px solid {tag['color']};
-                }}
-            """)
-            
             self.tag_checkboxes[tag['id']] = checkbox
             self.tags_layout.addWidget(checkbox)
         
@@ -820,21 +772,6 @@ class TagAssignmentDialog(QDialog):
         name_input = QLineEdit()
         name_input.setPlaceholderText("Enter tag name...")
         form_layout.addRow("Name:", name_input)
-        
-        color_button = QPushButton()
-        color_button.setFixedSize(30, 30)
-        selected_color = '#3498db'
-        color_button.setStyleSheet(f"background-color: {selected_color}; border: 1px solid #ccc;")
-        
-        def choose_color():
-            nonlocal selected_color
-            color = QColorDialog.getColor(QColor(selected_color), dialog)
-            if color.isValid():
-                selected_color = color.name()
-                color_button.setStyleSheet(f"background-color: {selected_color}; border: 1px solid #ccc;")
-        
-        color_button.clicked.connect(choose_color)
-        form_layout.addRow("Color:", color_button)
         layout.addLayout(form_layout)
         
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -846,7 +783,7 @@ class TagAssignmentDialog(QDialog):
             name = name_input.text().strip()
             if name:
                 try:
-                    self.db_manager.create_tag(name, selected_color)
+                    self.db_manager.create_tag(name)
                     self.load_tags()  # Refresh the tag list
                     QMessageBox.information(self, "Success", f"Tag '{name}' created successfully.")
                 except Exception as e:
