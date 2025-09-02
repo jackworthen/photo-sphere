@@ -1670,6 +1670,7 @@ class PhotoListWidget(QListWidget):
     photo_save_copy_requested = Signal(str)  # Signal emitted when photo copy is requested (filepath)
     photo_assign_tags_requested = Signal(int, str)  # Signal emitted when tag assignment is requested (photo_id, photo_name)
     batch_assign_tags_requested = Signal(list)  # Signal emitted when batch tag assignment is requested (list of photo_ids)
+    batch_delete_requested = Signal(list)  # Signal emitted when batch deletion is requested (list of photo_ids)
     
     def __init__(self, db_manager: DatabaseManager):
         super().__init__()
@@ -1906,8 +1907,14 @@ class PhotoListWidget(QListWidget):
                 
                 menu.addSeparator()
                 
-                # For now, we'll skip batch delete to avoid accidents
-                # Could add it later with additional confirmation
+                # Add batch remove option
+                batch_remove_action = QAction(f"Remove {len(photo_ids)} Photos", self)
+                batch_remove_action.triggered.connect(lambda: self.batch_delete_requested.emit(photo_ids))
+                menu.addAction(batch_remove_action)
+                
+                menu.addSeparator()
+                
+                # Info action
                 batch_info_action = QAction(f"{len(photo_ids)} photos selected", self)
                 batch_info_action.setEnabled(False)
                 menu.addAction(batch_info_action)
@@ -2170,6 +2177,7 @@ class PhotoSphereMainWindow(QMainWindow):
         self.photo_list.photo_save_copy_requested.connect(self.save_photo_copy)
         self.photo_list.photo_assign_tags_requested.connect(self.assign_tags_to_photo)
         self.photo_list.batch_assign_tags_requested.connect(self.batch_assign_tags_to_photos)
+        self.photo_list.batch_delete_requested.connect(self.batch_delete_photos)
         layout.addWidget(self.photo_list)
         
         return panel
@@ -2408,6 +2416,120 @@ class PhotoSphereMainWindow(QMainWindow):
                         self.show_photo_details(updated_photo)
             
             self.status_bar.showMessage(f"Updated tags for {len(photo_ids)} photos", 3000)
+    
+    def batch_delete_photos(self, photo_ids: List[int]):
+        """Remove multiple photos from the catalog."""
+        if not photo_ids:
+            return
+            
+        try:
+            # Get photo details for confirmation
+            photos_to_delete = []
+            for photo_id in photo_ids:
+                photo = self.db_manager.get_photo_by_id(photo_id)
+                if photo:
+                    photos_to_delete.append(photo)
+            
+            if not photos_to_delete:
+                QMessageBox.warning(self, "Error", "No photos found to remove.")
+                return
+            
+            # Create detailed confirmation dialog
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Remove Multiple Photos")
+            dialog.setModal(True)
+            layout = QVBoxLayout(dialog)
+            
+            # Warning message
+            warning_label = QLabel(f"⚠️  You are about to remove {len(photos_to_delete)} photos from the PhotoSphere catalog.")
+            warning_label.setStyleSheet("font-weight: bold; color: #d63031; margin-bottom: 10px;")
+            layout.addWidget(warning_label)
+            
+            # Explanation
+            explanation = QLabel("This will only remove the photos from PhotoSphere catalog, not from your computer.\n"
+                               "All associated tags and metadata will also be removed.")
+            explanation.setStyleSheet("margin-bottom: 15px;")
+            layout.addWidget(explanation)
+            
+            # List of photos (limited to first 10 for display)
+            if len(photos_to_delete) <= 10:
+                photos_label = QLabel("Photos to be removed:")
+                photos_label.setStyleSheet("font-weight: bold; margin-bottom: 5px;")
+                layout.addWidget(photos_label)
+                
+                photo_list = QLabel("\n".join([f"• {photo['filename']}" for photo in photos_to_delete]))
+                photo_list.setStyleSheet("margin-left: 20px; margin-bottom: 15px;")
+                layout.addWidget(photo_list)
+            else:
+                # Too many to list
+                preview_label = QLabel("Photos to be removed (showing first 10):")
+                preview_label.setStyleSheet("font-weight: bold; margin-bottom: 5px;")
+                layout.addWidget(preview_label)
+                
+                preview_list = QLabel("\n".join([f"• {photo['filename']}" for photo in photos_to_delete[:10]]) + 
+                                    f"\n... and {len(photos_to_delete) - 10} more photos")
+                preview_list.setStyleSheet("margin-left: 20px; margin-bottom: 15px;")
+                layout.addWidget(preview_list)
+            
+            # Final confirmation
+            final_warning = QLabel("Are you absolutely sure you want to proceed?")
+            final_warning.setStyleSheet("font-weight: bold; color: #2d3436;")
+            layout.addWidget(final_warning)
+            
+            # Buttons
+            button_layout = QHBoxLayout()
+            button_layout.addStretch()
+            
+            cancel_button = QPushButton("Cancel")
+            cancel_button.clicked.connect(dialog.reject)
+            button_layout.addWidget(cancel_button)
+            
+            remove_button = QPushButton(f"Remove {len(photos_to_delete)} Photos")
+            remove_button.setStyleSheet("QPushButton { background-color: #d63031; color: white; font-weight: bold; }")
+            remove_button.clicked.connect(dialog.accept)
+            button_layout.addWidget(remove_button)
+            
+            layout.addLayout(button_layout)
+            dialog.resize(500, 400)
+            
+            # Show confirmation dialog
+            if dialog.exec() == QDialog.Accepted:
+                # Proceed with deletion
+                successful_deletions = 0
+                failed_deletions = []
+                
+                for photo in photos_to_delete:
+                    if self.db_manager.delete_photo(photo['id']):
+                        successful_deletions += 1
+                    else:
+                        failed_deletions.append(photo['filename'])
+                
+                # Clear selection and refresh view
+                self.photo_list.clearSelection()
+                self.load_photos_metadata_only()
+                QTimer.singleShot(100, self.photo_list.load_visible_thumbnails)
+                
+                # Clear preview
+                self.photo_preview.clear()
+                self.photo_preview.setText("Select a photo to view details")
+                self.details_table.setRowCount(0)
+                
+                # Show results
+                if successful_deletions == len(photos_to_delete):
+                    self.status_bar.showMessage(f"Successfully removed {successful_deletions} photos", 3000)
+                    QMessageBox.information(self, "Success", f"Successfully removed {successful_deletions} photos from the catalog.")
+                else:
+                    error_msg = f"Removed {successful_deletions} of {len(photos_to_delete)} photos."
+                    if failed_deletions:
+                        error_msg += f"\n\nFailed to remove:\n• " + "\n• ".join(failed_deletions[:5])
+                        if len(failed_deletions) > 5:
+                            error_msg += f"\n... and {len(failed_deletions) - 5} more"
+                    
+                    QMessageBox.warning(self, "Partial Success", error_msg)
+                    self.status_bar.showMessage(f"Removed {successful_deletions} photos", 3000)
+        
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"An error occurred while removing photos: {str(e)}")
     
     def open_documentation(self):
         """Open the documentation URL in the default browser."""
