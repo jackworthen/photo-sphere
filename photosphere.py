@@ -2425,16 +2425,18 @@ class PhotoSphereMainWindow(QMainWindow):
             
             # Add standard options with counts
             self.tag_filter_combo.addItem(f"All ({total_photos})")
-            self.tag_filter_combo.addItem(f"Untagged ({untagged_count})")
+            if untagged_count > 0:  # Only show "Untagged" if there are untagged photos
+                self.tag_filter_combo.addItem(f"Untagged ({untagged_count})")
             
             # Add separator
-            self.tag_filter_combo.insertSeparator(2)
+            self.tag_filter_combo.insertSeparator(self.tag_filter_combo.count())
             
-            # Add all tags with counts
+            # Add all tags with counts (only show tags that have photos)
             tags_with_counts = self.db_manager.get_all_tags_with_counts()
             for tag in tags_with_counts:
-                display_text = f"{tag['name']} ({tag['photo_count']})"
-                self.tag_filter_combo.addItem(display_text)
+                if tag['photo_count'] > 0:  # Only include tags with photos
+                    display_text = f"{tag['name']} ({tag['photo_count']})"
+                    self.tag_filter_combo.addItem(display_text)
             
             # Set default selection (maintain current selection if possible)
             current_filter = self.current_tag_filter
