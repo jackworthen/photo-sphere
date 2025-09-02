@@ -547,6 +547,51 @@ class DatabaseManager:
         except Exception as e:
             print(f"Error setting photo tags: {e}")
             return False
+    
+    def batch_assign_tags_to_photos(self, photo_ids: List[int], tag_ids: List[int]) -> bool:
+        """Assign tags to multiple photos at once."""
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                cursor = conn.cursor()
+                # Insert tags for each photo
+                for photo_id in photo_ids:
+                    for tag_id in tag_ids:
+                        cursor.execute(
+                            "INSERT OR IGNORE INTO photo_tags (photo_id, tag_id) VALUES (?, ?)", 
+                            (photo_id, tag_id)
+                        )
+                conn.commit()
+                return True
+        except Exception as e:
+            print(f"Error batch assigning tags: {e}")
+            return False
+    
+    def get_common_tags_for_photos(self, photo_ids: List[int]) -> List[Dict]:
+        """Get tags that are common to all specified photos."""
+        if not photo_ids:
+            return []
+            
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                
+                # Get tags that appear in all photos
+                placeholders = ','.join(['?' for _ in photo_ids])
+                cursor.execute(f'''
+                    SELECT t.*, COUNT(pt.photo_id) as photo_count
+                    FROM tags t 
+                    INNER JOIN photo_tags pt ON t.id = pt.tag_id 
+                    WHERE pt.photo_id IN ({placeholders})
+                    GROUP BY t.id, t.name, t.color, t.created_date
+                    HAVING COUNT(pt.photo_id) = ?
+                    ORDER BY t.name
+                ''', photo_ids + [len(photo_ids)])
+                
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            print(f"Error getting common tags: {e}")
+            return []
 
 
 class TagManagementDialog(QDialog):
@@ -689,7 +734,248 @@ class TagManagementDialog(QDialog):
                 QMessageBox.warning(self, "Error", f"Failed to delete tag: {str(e)}")
 
 
+class BatchTagAssignmentDialog(QDialog):
+    """Dialog for assigning tags to multiple photos at once."""
+    
+    def __init__(self, db_manager: DatabaseManager, photo_ids: List[int], parent=None):
+        super().__init__(parent)
+        self.db_manager = db_manager
+        self.photo_ids = photo_ids
+        self.setWindowTitle(f"Batch Assign Tags - {len(photo_ids)} Photos")
+        self.setModal(True)
+        self.setup_ui()
+        self.load_tags()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Info section
+        info_label = QLabel(f"Assign tags to {len(self.photo_ids)} selected photos:")
+        info_label.setStyleSheet("font-weight: bold; margin-bottom: 10px;")
+        layout.addWidget(info_label)
+        
+        # Instructions
+        instructions = QLabel("✓ Checked tags will be added to ALL selected photos\n"
+                             "○ Unchecked tags will be removed from ALL selected photos\n"
+                             "◐ Partially checked tags are only on some photos")
+        instructions.setStyleSheet("color: #666; font-size: 11px; margin-bottom: 10px;")
+        layout.addWidget(instructions)
+        
+        # Tags list with checkboxes
+        self.tags_widget = QWidget()
+        self.tags_layout = QVBoxLayout(self.tags_widget)
+        
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(self.tags_widget)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setMaximumHeight(300)
+        layout.addWidget(scroll_area)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        create_tag_button = QPushButton("Create New Tag")
+        create_tag_button.clicked.connect(self.create_new_tag)
+        button_layout.addWidget(create_tag_button)
+        
+        button_layout.addStretch()
+        
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_button)
+        
+        apply_button = QPushButton("Apply Changes")
+        apply_button.clicked.connect(self.apply_changes)
+        apply_button.setStyleSheet("QPushButton { font-weight: bold; }")
+        button_layout.addWidget(apply_button)
+        
+        layout.addLayout(button_layout)
+        
+        self.resize(500, 400)
+    
+    def load_tags(self):
+        """Load all tags and show current assignments."""
+        # Clear existing checkboxes
+        for i in reversed(range(self.tags_layout.count())):
+            self.tags_layout.itemAt(i).widget().setParent(None)
+        
+        all_tags = self.db_manager.get_all_tags()
+        common_tags = self.db_manager.get_common_tags_for_photos(self.photo_ids)
+        common_tag_ids = [tag['id'] for tag in common_tags]
+        
+        self.tag_checkboxes = {}
+        
+        # Get tags that exist on some but not all photos
+        partially_assigned_tags = set()
+        for photo_id in self.photo_ids:
+            photo_tags = self.db_manager.get_photo_tags(photo_id)
+            photo_tag_ids = [tag['id'] for tag in photo_tags]
+            for tag_id in photo_tag_ids:
+                if tag_id not in common_tag_ids:
+                    partially_assigned_tags.add(tag_id)
+        
+        for tag in all_tags:
+            checkbox = QCheckBox(tag['name'])
+            
+            if tag['id'] in common_tag_ids:
+                # Tag is on all photos
+                checkbox.setChecked(True)
+                checkbox.setToolTip("This tag is assigned to all selected photos")
+            elif tag['id'] in partially_assigned_tags:
+                # Tag is on some but not all photos
+                checkbox.setCheckState(Qt.PartiallyChecked)
+                checkbox.setToolTip("This tag is assigned to some selected photos")
+            else:
+                # Tag is not on any photos
+                checkbox.setChecked(False)
+                checkbox.setToolTip("This tag is not assigned to any selected photos")
+            
+            self.tag_checkboxes[tag['id']] = checkbox
+            self.tags_layout.addWidget(checkbox)
+        
+        if not all_tags:
+            no_tags_label = QLabel("No tags available. Create some tags first.")
+            no_tags_label.setStyleSheet("color: gray; font-style: italic;")
+            self.tags_layout.addWidget(no_tags_label)
+    
+    def create_new_tag(self):
+        """Open tag creation dialog."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Create New Tag")
+        layout = QVBoxLayout(dialog)
+        
+        form_layout = QFormLayout()
+        name_input = QLineEdit()
+        name_input.setPlaceholderText("Enter tag name...")
+        form_layout.addRow("Name:", name_input)
+        layout.addLayout(form_layout)
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        
+        if dialog.exec() == QDialog.Accepted:
+            name = name_input.text().strip()
+            if name:
+                try:
+                    self.db_manager.create_tag(name)
+                    self.load_tags()  # Refresh the tag list
+                    QMessageBox.information(self, "Success", f"Tag '{name}' created successfully.")
+                except Exception as e:
+                    QMessageBox.warning(self, "Error", f"Failed to create tag: {str(e)}")
+    
 class TagAssignmentDialog(QDialog):
+    """Dialog for assigning tags to a single photo."""
+    
+    def __init__(self, db_manager: DatabaseManager, photo_id: int, photo_name: str, parent=None):
+        super().__init__(parent)
+        self.db_manager = db_manager
+        self.photo_id = photo_id
+        self.setWindowTitle(f"Assign Tags - {photo_name}")
+        self.setModal(True)
+        self.setup_ui()
+        self.load_tags()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        info_label = QLabel("Select tags to assign to this photo:")
+        layout.addWidget(info_label)
+        
+        # Tags list with checkboxes
+        self.tags_widget = QWidget()
+        self.tags_layout = QVBoxLayout(self.tags_widget)
+        
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(self.tags_widget)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setMaximumHeight(300)
+        layout.addWidget(scroll_area)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        create_tag_button = QPushButton("Create New Tag")
+        create_tag_button.clicked.connect(self.create_new_tag)
+        button_layout.addWidget(create_tag_button)
+        
+        button_layout.addStretch()
+        
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_button)
+        
+        save_button = QPushButton("Save")
+        save_button.clicked.connect(self.save_tags)
+        button_layout.addWidget(save_button)
+        
+        layout.addLayout(button_layout)
+        
+        self.resize(400, 350)
+    
+    def load_tags(self):
+        """Load all tags and show current assignments."""
+        # Clear existing checkboxes
+        for i in reversed(range(self.tags_layout.count())):
+            self.tags_layout.itemAt(i).widget().setParent(None)
+        
+        all_tags = self.db_manager.get_all_tags()
+        photo_tags = self.db_manager.get_photo_tags(self.photo_id)
+        photo_tag_ids = [tag['id'] for tag in photo_tags]
+        
+        self.tag_checkboxes = {}
+        
+        for tag in all_tags:
+            checkbox = QCheckBox(tag['name'])
+            checkbox.setChecked(tag['id'] in photo_tag_ids)
+            
+            self.tag_checkboxes[tag['id']] = checkbox
+            self.tags_layout.addWidget(checkbox)
+        
+        if not all_tags:
+            no_tags_label = QLabel("No tags available. Create some tags first.")
+            no_tags_label.setStyleSheet("color: gray; font-style: italic;")
+            self.tags_layout.addWidget(no_tags_label)
+    
+    def create_new_tag(self):
+        """Open tag creation dialog."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Create New Tag")
+        layout = QVBoxLayout(dialog)
+        
+        form_layout = QFormLayout()
+        name_input = QLineEdit()
+        name_input.setPlaceholderText("Enter tag name...")
+        form_layout.addRow("Name:", name_input)
+        layout.addLayout(form_layout)
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        
+        if dialog.exec() == QDialog.Accepted:
+            name = name_input.text().strip()
+            if name:
+                try:
+                    self.db_manager.create_tag(name)
+                    self.load_tags()  # Refresh the tag list
+                    QMessageBox.information(self, "Success", f"Tag '{name}' created successfully.")
+                except Exception as e:
+                    QMessageBox.warning(self, "Error", f"Failed to create tag: {str(e)}")
+    
+    def save_tags(self):
+        """Save tag assignments."""
+        selected_tag_ids = []
+        for tag_id, checkbox in self.tag_checkboxes.items():
+            if checkbox.isChecked():
+                selected_tag_ids.append(tag_id)
+        
+        if self.db_manager.set_photo_tags(self.photo_id, selected_tag_ids):
+            self.accept()
+        else:
+            QMessageBox.warning(self, "Error", "Failed to save tag assignments.")
     """Dialog for assigning tags to a photo."""
     
     def __init__(self, db_manager: DatabaseManager, photo_id: int, photo_name: str, parent=None):
@@ -1383,6 +1669,7 @@ class PhotoListWidget(QListWidget):
     photo_open_requested = Signal(str)    # Signal emitted when photo should be opened in default viewer
     photo_save_copy_requested = Signal(str)  # Signal emitted when photo copy is requested (filepath)
     photo_assign_tags_requested = Signal(int, str)  # Signal emitted when tag assignment is requested (photo_id, photo_name)
+    batch_assign_tags_requested = Signal(list)  # Signal emitted when batch tag assignment is requested (list of photo_ids)
     
     def __init__(self, db_manager: DatabaseManager):
         super().__init__()
@@ -1400,6 +1687,9 @@ class PhotoListWidget(QListWidget):
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
         self.itemDoubleClicked.connect(self.on_item_double_clicked)
+        
+        # Enable multi-selection
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
         
         # Set uniform item sizes to prevent layout issues
         self.setUniformItemSizes(True)
@@ -1564,38 +1854,63 @@ class PhotoListWidget(QListWidget):
     def show_context_menu(self, position: QPoint):
         """Show context menu for photo operations."""
         item = self.itemAt(position)
-        if item is None:
-            return
+        selected_items = self.selectedItems()
         
-        photo_data = item.data(Qt.UserRole)
-        if photo_data is None:
+        if not selected_items:
             return
         
         menu = QMenu(self)
         
-        open_action = QAction("Open in Default Viewer", self)
-        open_action.triggered.connect(lambda: self.photo_open_requested.emit(photo_data['filepath']))
-        menu.addAction(open_action)
-        
-        # Add the Save Copy action
-        save_copy_action = QAction("Save Copy", self)
-        save_copy_action.triggered.connect(lambda: self.photo_save_copy_requested.emit(photo_data['filepath']))
-        menu.addAction(save_copy_action)
-        
-        menu.addSeparator()
-        
-        # Add the Assign Tags action
-        assign_tags_action = QAction("Assign Tags", self)
-        assign_tags_action.triggered.connect(
-            lambda: self.photo_assign_tags_requested.emit(photo_data['id'], photo_data['filename'])
-        )
-        menu.addAction(assign_tags_action)
-        
-        menu.addSeparator()
-        
-        delete_action = QAction("Remove Photo", self)
-        delete_action.triggered.connect(lambda: self.photo_delete_requested.emit(photo_data['id']))
-        menu.addAction(delete_action)
+        if len(selected_items) == 1:
+            # Single photo selected - show all options
+            photo_data = selected_items[0].data(Qt.UserRole)
+            if photo_data is None:
+                return
+            
+            open_action = QAction("Open in Default Viewer", self)
+            open_action.triggered.connect(lambda: self.photo_open_requested.emit(photo_data['filepath']))
+            menu.addAction(open_action)
+            
+            save_copy_action = QAction("Save Copy", self)
+            save_copy_action.triggered.connect(lambda: self.photo_save_copy_requested.emit(photo_data['filepath']))
+            menu.addAction(save_copy_action)
+            
+            menu.addSeparator()
+            
+            assign_tags_action = QAction("Assign Tags", self)
+            assign_tags_action.triggered.connect(
+                lambda: self.photo_assign_tags_requested.emit(photo_data['id'], photo_data['filename'])
+            )
+            menu.addAction(assign_tags_action)
+            
+            menu.addSeparator()
+            
+            delete_action = QAction("Remove Photo", self)
+            delete_action.triggered.connect(lambda: self.photo_delete_requested.emit(photo_data['id']))
+            menu.addAction(delete_action)
+            
+        else:
+            # Multiple photos selected - show batch operations only
+            photo_ids = []
+            photo_names = []
+            for selected_item in selected_items:
+                photo_data = selected_item.data(Qt.UserRole)
+                if photo_data:
+                    photo_ids.append(photo_data['id'])
+                    photo_names.append(photo_data['filename'])
+            
+            if photo_ids:
+                batch_assign_action = QAction(f"Assign Tags to {len(photo_ids)} Photos", self)
+                batch_assign_action.triggered.connect(lambda: self.batch_assign_tags_requested.emit(photo_ids))
+                menu.addAction(batch_assign_action)
+                
+                menu.addSeparator()
+                
+                # For now, we'll skip batch delete to avoid accidents
+                # Could add it later with additional confirmation
+                batch_info_action = QAction(f"{len(photo_ids)} photos selected", self)
+                batch_info_action.setEnabled(False)
+                menu.addAction(batch_info_action)
         
         menu.exec(self.mapToGlobal(position))
     
@@ -1834,6 +2149,12 @@ class PhotoSphereMainWindow(QMainWindow):
         # Spacer
         toolbar_layout.addStretch()
         
+        # Selection info (hidden by default)
+        self.selection_info_label = QLabel("")
+        self.selection_info_label.setStyleSheet("color: #0066cc; font-weight: bold;")
+        self.selection_info_label.hide()
+        toolbar_layout.addWidget(self.selection_info_label)
+        
         # Photo count
         self.photo_count_label = QLabel("Loading photos...")
         toolbar_layout.addWidget(self.photo_count_label)
@@ -1843,10 +2164,12 @@ class PhotoSphereMainWindow(QMainWindow):
         # Photo list with db_manager reference
         self.photo_list = PhotoListWidget(self.db_manager)
         self.photo_list.itemClicked.connect(self.on_photo_selected)
+        self.photo_list.itemSelectionChanged.connect(self.on_selection_changed)
         self.photo_list.photo_delete_requested.connect(self.delete_photo)
         self.photo_list.photo_open_requested.connect(self.open_photo_in_default_viewer)
         self.photo_list.photo_save_copy_requested.connect(self.save_photo_copy)
         self.photo_list.photo_assign_tags_requested.connect(self.assign_tags_to_photo)
+        self.photo_list.batch_assign_tags_requested.connect(self.batch_assign_tags_to_photos)
         layout.addWidget(self.photo_list)
         
         return panel
@@ -2060,6 +2383,32 @@ class PhotoSphereMainWindow(QMainWindow):
                     self.current_selected_photo = updated_photo
                     self.show_photo_details(updated_photo)
     
+    def batch_assign_tags_to_photos(self, photo_ids: List[int]):
+        """Show batch tag assignment dialog for multiple photos."""
+        if not photo_ids:
+            return
+            
+        dialog = BatchTagAssignmentDialog(self.db_manager, photo_ids, self)
+        if dialog.exec() == QDialog.Accepted:
+            # Always refresh tag filter options (user might have created new tags)
+            self.load_tag_filter_options()
+            
+            # Refresh the current view if we're filtering by tags
+            if self.current_tag_filter != "All":
+                self.load_photos_metadata_only()
+                QTimer.singleShot(100, self.photo_list.load_visible_thumbnails)
+            
+            # Refresh photo details if one of the batch photos is currently selected
+            if hasattr(self, 'current_selected_photo'):
+                current_id = self.current_selected_photo.get('id')
+                if current_id and current_id in photo_ids:
+                    updated_photo = self.db_manager.get_photo_by_id(current_id)
+                    if updated_photo:
+                        self.current_selected_photo = updated_photo
+                        self.show_photo_details(updated_photo)
+            
+            self.status_bar.showMessage(f"Updated tags for {len(photo_ids)} photos", 3000)
+    
     def open_documentation(self):
         """Open the documentation URL in the default browser."""
         import webbrowser
@@ -2128,12 +2477,47 @@ class PhotoSphereMainWindow(QMainWindow):
     
     def on_photo_selected(self, item: QListWidgetItem):
         """Handle photo selection to show details."""
-        photo = item.data(Qt.UserRole)
-        if photo:
-            self.current_selected_photo = photo  # Store for refresh purposes
-            self.show_photo_details(photo)
-            # Ensure thumbnail is loaded for selected photo
-            self.photo_list.load_thumbnail_for_item(item)
+        # Only show details if exactly one photo is selected
+        selected_items = self.photo_list.selectedItems()
+        if len(selected_items) == 1:
+            photo = item.data(Qt.UserRole)
+            if photo:
+                self.current_selected_photo = photo  # Store for refresh purposes
+                self.show_photo_details(photo)
+                # Ensure thumbnail is loaded for selected photo
+                self.photo_list.load_thumbnail_for_item(item)
+        else:
+            # Multiple photos selected or none selected
+            self.photo_preview.clear()
+            self.photo_preview.setText("Select a single photo to view details")
+            self.details_table.setRowCount(0)
+    
+    def on_selection_changed(self):
+        """Handle changes in photo selection."""
+        selected_items = self.photo_list.selectedItems()
+        count = len(selected_items)
+        
+        if count > 1:
+            # Multiple photos selected
+            self.selection_info_label.setText(f"{count} photos selected")
+            self.selection_info_label.show()
+            
+            # Clear details panel
+            self.photo_preview.clear()
+            self.photo_preview.setText(f"{count} photos selected\nRight-click to assign tags to all")
+            self.details_table.setRowCount(0)
+            
+        elif count == 1:
+            # Single photo selected
+            self.selection_info_label.hide()
+            # Details will be shown by on_photo_selected
+            
+        else:
+            # No photos selected
+            self.selection_info_label.hide()
+            self.photo_preview.clear()
+            self.photo_preview.setText("Select a photo to view details")
+            self.details_table.setRowCount(0)
     
     def format_gps_coordinate(self, lat: float, lon: float) -> str:
         """Format GPS coordinates for display."""
