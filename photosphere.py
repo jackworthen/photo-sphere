@@ -519,6 +519,20 @@ class DatabaseManager:
             cursor.execute("SELECT * FROM tags ORDER BY name")
             return [dict(row) for row in cursor.fetchall()]
     
+    def get_all_tags_with_counts(self) -> List[Dict]:
+        """Get all tags with photo counts."""
+        with sqlite3.connect(str(self.db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT t.*, COUNT(pt.photo_id) as photo_count
+                FROM tags t 
+                LEFT JOIN photo_tags pt ON t.id = pt.tag_id 
+                GROUP BY t.id, t.name, t.color, t.created_date
+                ORDER BY t.name
+            ''')
+            return [dict(row) for row in cursor.fetchall()]
+    
     def update_tag(self, tag_id: int, name: str, color: str) -> bool:
         """Update a tag."""
         with sqlite3.connect(str(self.db_path)) as conn:
@@ -662,8 +676,8 @@ class TagManagementDialog(QDialog):
         existing_layout = QVBoxLayout(existing_tags_group)
         
         self.tags_table = QTableWidget()
-        self.tags_table.setColumnCount(3)
-        self.tags_table.setHorizontalHeaderLabels(["Name", "Edit", "Delete"])
+        self.tags_table.setColumnCount(4)
+        self.tags_table.setHorizontalHeaderLabels(["Name", "Photo Count", "Edit", "Delete"])
         self.tags_table.horizontalHeader().setStretchLastSection(True)
         self.tags_table.verticalHeader().hide()
         existing_layout.addWidget(self.tags_table)
@@ -678,7 +692,7 @@ class TagManagementDialog(QDialog):
         button_layout.addWidget(close_button)
         layout.addLayout(button_layout)
         
-        self.resize(500, 400)
+        self.resize(600, 400)
     
     def create_tag(self):
         """Create a new tag."""
@@ -696,23 +710,28 @@ class TagManagementDialog(QDialog):
             QMessageBox.warning(self, "Error", f"Failed to create tag: {str(e)}")
     
     def load_tags(self):
-        """Load existing tags into the table."""
-        tags = self.db_manager.get_all_tags()
-        self.tags_table.setRowCount(len(tags))
+        """Load existing tags into the table with photo counts."""
+        tags_with_counts = self.db_manager.get_all_tags_with_counts()
+        self.tags_table.setRowCount(len(tags_with_counts))
         
-        for i, tag in enumerate(tags):
+        for i, tag in enumerate(tags_with_counts):
             # Name
             self.tags_table.setItem(i, 0, QTableWidgetItem(tag['name']))
+            
+            # Photo Count
+            count_item = QTableWidgetItem(str(tag['photo_count']))
+            count_item.setTextAlignment(Qt.AlignCenter)
+            self.tags_table.setItem(i, 1, count_item)
             
             # Edit button
             edit_button = QPushButton("Edit")
             edit_button.clicked.connect(lambda checked, tag_id=tag['id']: self.edit_tag(tag_id))
-            self.tags_table.setCellWidget(i, 1, edit_button)
+            self.tags_table.setCellWidget(i, 2, edit_button)
             
             # Delete button
             delete_button = QPushButton("Delete")
             delete_button.clicked.connect(lambda checked, tag_id=tag['id'], tag_name=tag['name']: self.delete_tag(tag_id, tag_name))
-            self.tags_table.setCellWidget(i, 2, delete_button)
+            self.tags_table.setCellWidget(i, 3, delete_button)
     
     def edit_tag(self, tag_id: int):
         """Edit an existing tag."""
@@ -2249,6 +2268,7 @@ class PhotoSphereMainWindow(QMainWindow):
         toolbar_layout.addWidget(filter_label)
         
         self.tag_filter_combo = QComboBox()
+        self.tag_filter_combo.setMinimumWidth(200)  # Increased width to accommodate tag names with counts
         self.tag_filter_combo.currentTextChanged.connect(self.on_tag_filter_changed)
         toolbar_layout.addWidget(self.tag_filter_combo)
         
@@ -2396,25 +2416,40 @@ class PhotoSphereMainWindow(QMainWindow):
         QTimer.singleShot(200, self.photo_list.load_visible_thumbnails)
     
     def load_tag_filter_options(self):
-        """Load tag filter dropdown options."""
+        """Load tag filter dropdown options with photo counts."""
         try:
             # Clear existing items
             self.tag_filter_combo.clear()
             
-            # Add standard options
-            self.tag_filter_combo.addItem("All")
-            self.tag_filter_combo.addItem("Untagged")
+            # Get total photo count for "All" option
+            total_photos = self.db_manager.get_total_photo_count()
+            
+            # Get untagged photo count
+            untagged_count = self.db_manager.get_total_photo_count("Untagged")
+            
+            # Add standard options with counts
+            self.tag_filter_combo.addItem(f"All ({total_photos})")
+            self.tag_filter_combo.addItem(f"Untagged ({untagged_count})")
             
             # Add separator
             self.tag_filter_combo.insertSeparator(2)
             
-            # Add all tags
-            tags = self.db_manager.get_all_tags()
-            for tag in tags:
-                self.tag_filter_combo.addItem(tag['name'])
+            # Add all tags with counts
+            tags_with_counts = self.db_manager.get_all_tags_with_counts()
+            for tag in tags_with_counts:
+                display_text = f"{tag['name']} ({tag['photo_count']})"
+                self.tag_filter_combo.addItem(display_text)
             
-            # Set default selection
-            self.tag_filter_combo.setCurrentText("All")
+            # Set default selection (maintain current selection if possible)
+            current_filter = self.current_tag_filter
+            for i in range(self.tag_filter_combo.count()):
+                item_text = self.tag_filter_combo.itemText(i)
+                if item_text.startswith(current_filter + " (") or item_text == current_filter:
+                    self.tag_filter_combo.setCurrentIndex(i)
+                    break
+            else:
+                # If current filter not found, default to "All"
+                self.tag_filter_combo.setCurrentText(f"All ({total_photos})")
             
         except Exception as e:
             print(f"Error loading tag filter options: {e}")
@@ -2467,10 +2502,16 @@ class PhotoSphereMainWindow(QMainWindow):
         # Start loading visible thumbnails after a short delay
         QTimer.singleShot(100, self.photo_list.load_visible_thumbnails)
     
-    def on_tag_filter_changed(self, tag_name: str):
+    def on_tag_filter_changed(self, tag_name_with_count: str):
         """Handle tag filter change."""
-        if tag_name == "":  # Ignore empty selections
+        if tag_name_with_count == "":  # Ignore empty selections
             return
+        
+        # Extract the actual tag name from the display text (remove count in parentheses)
+        if " (" in tag_name_with_count and tag_name_with_count.endswith(")"):
+            tag_name = tag_name_with_count.split(" (")[0]
+        else:
+            tag_name = tag_name_with_count
             
         self.current_tag_filter = tag_name
         self.load_photos_metadata_only()
