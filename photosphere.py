@@ -375,8 +375,8 @@ class DatabaseManager:
         
         return info
     
-    def get_photos(self, limit: Optional[int] = None, offset: int = 0, tag_filter: str = None) -> List[Dict]:
-        """Retrieve photos with optional pagination and tag filtering."""
+    def get_photos(self, limit: Optional[int] = None, offset: int = 0, tag_filter: str = None, sort_by: str = None) -> List[Dict]:
+        """Retrieve photos with optional pagination, tag filtering, and sorting."""
         with sqlite3.connect(str(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
@@ -395,7 +395,8 @@ class DatabaseManager:
                 where_clause = " WHERE t.name = ?"
                 params.append(tag_filter)
             
-            order_clause = " ORDER BY p.date_added DESC"
+            # Add sorting
+            order_clause = self._get_sort_clause(sort_by)
             
             if limit:
                 limit_clause = " LIMIT ? OFFSET ?"
@@ -406,6 +407,39 @@ class DatabaseManager:
             
             cursor.execute(query, params)
             return [dict(row) for row in cursor.fetchall()]
+    
+    def _get_sort_clause(self, sort_by: str) -> str:
+        """Generate the ORDER BY clause based on the sort option."""
+        if not sort_by:
+            return " ORDER BY p.date_added DESC"
+        
+        sort_mappings = {
+            "Date Added (Newest)": "p.date_added DESC",
+            "Date Added (Oldest)": "p.date_added ASC",
+            "Date Taken (Newest)": "p.date_taken DESC NULLS LAST",
+            "Date Taken (Oldest)": "p.date_taken ASC NULLS LAST",
+            "Filename (A-Z)": "p.filename ASC",
+            "Filename (Z-A)": "p.filename DESC",
+            "File Size (Largest)": "p.file_size DESC NULLS LAST",
+            "File Size (Smallest)": "p.file_size ASC NULLS LAST",
+            "Camera Make (A-Z)": "p.camera_make ASC NULLS LAST",
+            "Camera Make (Z-A)": "p.camera_make DESC NULLS LAST",
+            "Camera Model (A-Z)": "p.camera_model ASC NULLS LAST",
+            "Camera Model (Z-A)": "p.camera_model DESC NULLS LAST",
+            "Focal Length (Longest)": "p.focal_length DESC NULLS LAST",
+            "Focal Length (Shortest)": "p.focal_length ASC NULLS LAST",
+            "Aperture (Widest)": "p.aperture ASC NULLS LAST",
+            "Aperture (Narrowest)": "p.aperture DESC NULLS LAST",
+            "ISO (Highest)": "p.iso DESC NULLS LAST",
+            "ISO (Lowest)": "p.iso ASC NULLS LAST",
+            "Width (Largest)": "p.width DESC NULLS LAST",
+            "Width (Smallest)": "p.width ASC NULLS LAST",
+            "Height (Largest)": "p.height DESC NULLS LAST",
+            "Height (Smallest)": "p.height ASC NULLS LAST"
+        }
+        
+        sort_clause = sort_mappings.get(sort_by, "p.date_added DESC")
+        return f" ORDER BY {sort_clause}"
     
     def get_total_photo_count(self, tag_filter: str = None) -> int:
         """Get total number of photos with optional tag filtering."""
@@ -2132,6 +2166,7 @@ class PhotoSphereMainWindow(QMainWindow):
         self.db_manager = DatabaseManager()
         self.current_photos = []
         self.current_tag_filter = "All"
+        self.current_sort_option = "Date Added (Newest)"  # Default sort
         self.show_filenames = False  # Default to not showing filenames
         self.setup_ui()
         
@@ -2201,7 +2236,7 @@ class PhotoSphereMainWindow(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         
-        # Toolbar with import button, tag filter, and photo count
+        # Toolbar with import button, tag filter, sort options, and photo count
         toolbar_layout = QHBoxLayout()
         
         # Import button
@@ -2216,6 +2251,16 @@ class PhotoSphereMainWindow(QMainWindow):
         self.tag_filter_combo = QComboBox()
         self.tag_filter_combo.currentTextChanged.connect(self.on_tag_filter_changed)
         toolbar_layout.addWidget(self.tag_filter_combo)
+        
+        # Sort options dropdown
+        sort_label = QLabel("Sort by:")
+        toolbar_layout.addWidget(sort_label)
+        
+        self.sort_combo = QComboBox()
+        self.sort_combo.setMinimumWidth(180)  # Set minimum width to accommodate longer text
+        self.sort_combo.currentTextChanged.connect(self.on_sort_changed)
+        # Don't load sort options here yet - will be done after UI is complete
+        toolbar_layout.addWidget(self.sort_combo)
         
         # Spacer
         toolbar_layout.addStretch()
@@ -2341,6 +2386,9 @@ class PhotoSphereMainWindow(QMainWindow):
         # Load tag filter options
         self.load_tag_filter_options()
         
+        # Load sort options now that UI is complete
+        self.load_sort_options()
+        
         # Load photo metadata without thumbnails for fast startup
         self.load_photos_metadata_only()
         
@@ -2371,6 +2419,54 @@ class PhotoSphereMainWindow(QMainWindow):
         except Exception as e:
             print(f"Error loading tag filter options: {e}")
     
+    def load_sort_options(self):
+        """Load sort options into the dropdown."""
+        sort_options = [
+            "Date Added (Newest)",
+            "Date Added (Oldest)",
+            "Date Taken (Newest)", 
+            "Date Taken (Oldest)",
+            "Filename (A-Z)",
+            "Filename (Z-A)",
+            "File Size (Largest)",
+            "File Size (Smallest)",
+            "Camera Make (A-Z)",
+            "Camera Make (Z-A)",
+            "Camera Model (A-Z)",
+            "Camera Model (Z-A)",
+            "Focal Length (Longest)",
+            "Focal Length (Shortest)",
+            "Aperture (Widest)",
+            "Aperture (Narrowest)",
+            "ISO (Highest)",
+            "ISO (Lowest)",
+            "Width (Largest)",
+            "Width (Smallest)",
+            "Height (Largest)",
+            "Height (Smallest)"
+        ]
+        
+        self.sort_combo.clear()
+        for option in sort_options:
+            self.sort_combo.addItem(option)
+        
+        # Set default selection
+        self.sort_combo.setCurrentText(self.current_sort_option)
+    
+    def on_sort_changed(self, sort_option: str):
+        """Handle sort option change."""
+        if sort_option == "":  # Ignore empty selections
+            return
+        
+        # Check if UI is fully initialized before proceeding
+        if not hasattr(self, 'photo_list') or not hasattr(self, 'photo_count_label'):
+            return
+        
+        self.current_sort_option = sort_option
+        self.load_photos_metadata_only()
+        # Start loading visible thumbnails after a short delay
+        QTimer.singleShot(100, self.photo_list.load_visible_thumbnails)
+    
     def on_tag_filter_changed(self, tag_name: str):
         """Handle tag filter change."""
         if tag_name == "":  # Ignore empty selections
@@ -2387,9 +2483,12 @@ class PhotoSphereMainWindow(QMainWindow):
             self.photo_list.clear_thumbnails()
             self.photo_list.clear()
             
-            # Apply current tag filter
+            # Apply current tag filter and sort option
             tag_filter = None if self.current_tag_filter == "All" else self.current_tag_filter
-            self.current_photos = self.db_manager.get_photos(tag_filter=tag_filter)
+            self.current_photos = self.db_manager.get_photos(
+                tag_filter=tag_filter, 
+                sort_by=self.current_sort_option
+            )
             
             for photo in self.current_photos:
                 item = QListWidgetItem()
@@ -2415,7 +2514,8 @@ class PhotoSphereMainWindow(QMainWindow):
             # Update status
             if len(self.current_photos) > 0:
                 filter_status = f" (filtered by '{self.current_tag_filter}')" if self.current_tag_filter != "All" else ""
-                self.status_bar.showMessage(f"Photos loaded{filter_status} - thumbnails loading in background", 3000)
+                sort_status = f" | Sorted by: {self.current_sort_option}"
+                self.status_bar.showMessage(f"Photos loaded{filter_status}{sort_status} - thumbnails loading in background", 3000)
             else:
                 filter_status = f" matching '{self.current_tag_filter}'" if self.current_tag_filter != "All" else ""
                 self.status_bar.showMessage(f"No photos{filter_status} in catalog", 3000)
