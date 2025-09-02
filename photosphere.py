@@ -865,6 +865,69 @@ class BatchTagAssignmentDialog(QDialog):
                 except Exception as e:
                     QMessageBox.warning(self, "Error", f"Failed to create tag: {str(e)}")
     
+    def apply_changes(self):
+        """Apply tag changes to all selected photos."""
+        try:
+            # Get tags to add (checked tags)
+            tags_to_add = []
+            tags_to_remove = []
+            
+            for tag_id, checkbox in self.tag_checkboxes.items():
+                if checkbox.checkState() == Qt.Checked:
+                    tags_to_add.append(tag_id)
+                elif checkbox.checkState() == Qt.Unchecked:
+                    tags_to_remove.append(tag_id)
+                # Partially checked tags are left as-is (no change)
+            
+            success_count = 0
+            
+            with sqlite3.connect(str(self.db_manager.db_path)) as conn:
+                cursor = conn.cursor()
+                
+                for photo_id in self.photo_ids:
+                    try:
+                        # Add new tags
+                        for tag_id in tags_to_add:
+                            cursor.execute(
+                                "INSERT OR IGNORE INTO photo_tags (photo_id, tag_id) VALUES (?, ?)",
+                                (photo_id, tag_id)
+                            )
+                        
+                        # Remove unchecked tags
+                        for tag_id in tags_to_remove:
+                            cursor.execute(
+                                "DELETE FROM photo_tags WHERE photo_id = ? AND tag_id = ?",
+                                (photo_id, tag_id)
+                            )
+                        
+                        success_count += 1
+                    except Exception as e:
+                        print(f"Error updating tags for photo {photo_id}: {e}")
+                
+                conn.commit()
+            
+            if success_count == len(self.photo_ids):
+                QMessageBox.information(
+                    self, 
+                    "Success", 
+                    f"Successfully updated tags for {success_count} photos."
+                )
+                self.accept()
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Partial Success",
+                    f"Updated tags for {success_count} of {len(self.photo_ids)} photos. "
+                    "Some updates may have failed."
+                )
+                
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to apply tag changes: {str(e)}"
+            )
+    
 class TagAssignmentDialog(QDialog):
     """Dialog for assigning tags to a single photo."""
     
@@ -2069,6 +2132,7 @@ class PhotoSphereMainWindow(QMainWindow):
         self.db_manager = DatabaseManager()
         self.current_photos = []
         self.current_tag_filter = "All"
+        self.show_filenames = False  # Default to not showing filenames
         self.setup_ui()
         
         # Show window immediately, load data afterward
@@ -2240,6 +2304,15 @@ class PhotoSphereMainWindow(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
         
+        # Edit menu
+        edit_menu = menubar.addMenu("Edit")
+        
+        self.show_filenames_action = QAction("Show Filename with Thumbnail", self)
+        self.show_filenames_action.setCheckable(True)
+        self.show_filenames_action.setChecked(self.show_filenames)
+        self.show_filenames_action.triggered.connect(self.toggle_filename_visibility)
+        edit_menu.addAction(self.show_filenames_action)
+        
         # Tags menu
         tags_menu = menubar.addMenu("Tags")
         
@@ -2320,7 +2393,11 @@ class PhotoSphereMainWindow(QMainWindow):
             
             for photo in self.current_photos:
                 item = QListWidgetItem()
-                item.setText(photo['filename'])
+                # Conditionally set filename based on user preference
+                if self.show_filenames:
+                    item.setText(photo['filename'])
+                else:
+                    item.setText("")  # Empty text when filenames are hidden
                 item.setData(Qt.UserRole, photo)
                 
                 # Don't set any placeholder icon - let thumbnails appear as they load
@@ -2347,6 +2424,25 @@ class PhotoSphereMainWindow(QMainWindow):
             print(f"Error loading photos: {e}")
             self.photo_count_label.setText("Error loading photos")
             QMessageBox.warning(self, "Error", f"Failed to load photos: {str(e)}")
+    
+    def toggle_filename_visibility(self):
+        """Toggle the visibility of filenames below thumbnails."""
+        self.show_filenames = self.show_filenames_action.isChecked()
+        
+        # Update existing items
+        for i in range(self.photo_list.count()):
+            item = self.photo_list.item(i)
+            if item:
+                photo_data = item.data(Qt.UserRole)
+                if photo_data:
+                    if self.show_filenames:
+                        item.setText(photo_data['filename'])
+                    else:
+                        item.setText("")
+        
+        # Update status bar
+        status_msg = "Showing filenames" if self.show_filenames else "Hiding filenames"
+        self.status_bar.showMessage(status_msg, 2000)
     
     def update_database_status(self):
         """Update the database information in the status bar."""
