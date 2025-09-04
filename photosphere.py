@@ -709,8 +709,8 @@ class TagManagementDialog(QDialog):
         existing_layout = QVBoxLayout(existing_tags_group)
         
         self.tags_table = QTableWidget()
-        self.tags_table.setColumnCount(4)
-        self.tags_table.setHorizontalHeaderLabels(["Name", "Photo Count", "Edit", "Delete"])
+        self.tags_table.setColumnCount(3)
+        self.tags_table.setHorizontalHeaderLabels(["Name", "Photo Count", "Delete"])
         self.tags_table.horizontalHeader().setStretchLastSection(True)
         self.tags_table.verticalHeader().hide()
         existing_layout.addWidget(self.tags_table)
@@ -756,15 +756,25 @@ class TagManagementDialog(QDialog):
             count_item.setTextAlignment(Qt.AlignCenter)
             self.tags_table.setItem(i, 1, count_item)
             
-            # Edit button
-            edit_button = QPushButton("Edit")
-            edit_button.clicked.connect(lambda checked, tag_id=tag['id']: self.edit_tag(tag_id))
-            self.tags_table.setCellWidget(i, 2, edit_button)
-            
             # Delete button
             delete_button = QPushButton("Delete")
             delete_button.clicked.connect(lambda checked, tag_id=tag['id'], tag_name=tag['name']: self.delete_tag(tag_id, tag_name))
-            self.tags_table.setCellWidget(i, 3, delete_button)
+            self.tags_table.setCellWidget(i, 2, delete_button)
+    
+    def on_item_double_clicked(self, item: QTableWidgetItem):
+        """Handle double-click on table items to edit tag names."""
+        # Only allow editing if the double-clicked item is in the Name column (column 0)
+        if item.column() == 0:
+            row = item.row()
+            # Get the tag ID from the table data
+            # We need to find the tag by matching the name since we don't store the ID in the item
+            tag_name = item.text()
+            
+            # Find the tag in our database
+            all_tags = self.db_manager.get_all_tags()
+            tag = next((t for t in all_tags if t['name'] == tag_name), None)
+            if tag:
+                self.edit_tag(tag['id'])
     
     def edit_tag(self, tag_id: int):
         """Edit an existing tag."""
@@ -2093,7 +2103,7 @@ class PhotoSphereMainWindow(QMainWindow):
     
     def setup_ui(self):
         self.setWindowTitle("PhotoSphere")
-        self.setGeometry(100, 100, 1290, 900)
+        self.setGeometry(100, 100, 1250, 900)
         
         # Set application icon
         try:
