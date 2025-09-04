@@ -2093,7 +2093,7 @@ class PhotoSphereMainWindow(QMainWindow):
     
     def setup_ui(self):
         self.setWindowTitle("PhotoSphere")
-        self.setGeometry(100, 100, 1200, 900)
+        self.setGeometry(100, 100, 1250, 900)
         
         # Set application icon
         try:
