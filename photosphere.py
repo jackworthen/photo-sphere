@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QCheckBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QPoint
-from PySide6.QtGui import QPixmap, QIcon, QDragEnterEvent, QDropEvent, QAction, QTransform, QPainter, QColor
+from PySide6.QtGui import QPixmap, QIcon, QDragEnterEvent, QDropEvent, QAction, QTransform, QPainter, QColor, QKeySequence
 
 from PIL import Image
 from PIL.ExifTags import TAGS
@@ -2253,6 +2253,7 @@ class PhotoSphereMainWindow(QMainWindow):
         file_menu = menubar.addMenu("File")
         
         import_action = QAction("Import Photos", self)
+        import_action.setShortcut(QKeySequence("Ctrl+I"))
         import_action.triggered.connect(self.import_photos_dialog)
         file_menu.addAction(import_action)
         
@@ -2265,6 +2266,7 @@ class PhotoSphereMainWindow(QMainWindow):
         file_menu.addSeparator()
         
         exit_action = QAction("Exit", self)
+        exit_action.setShortcut(QKeySequence("Ctrl+E"))
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
         
@@ -2274,6 +2276,7 @@ class PhotoSphereMainWindow(QMainWindow):
         self.show_filenames_action = QAction("Show Filename with Thumbnail", self)
         self.show_filenames_action.setCheckable(True)
         self.show_filenames_action.setChecked(self.show_filenames)
+        self.show_filenames_action.setShortcut(QKeySequence("Ctrl+F"))
         self.show_filenames_action.triggered.connect(self.toggle_filename_visibility)
         edit_menu.addAction(self.show_filenames_action)
         
@@ -2281,6 +2284,7 @@ class PhotoSphereMainWindow(QMainWindow):
         tags_menu = menubar.addMenu("Tags")
         
         manage_tags_action = QAction("Manage Tags", self)
+        manage_tags_action.setShortcut(QKeySequence("Ctrl+T"))
         manage_tags_action.triggered.connect(self.manage_tags)
         tags_menu.addAction(manage_tags_action)
         
@@ -2288,12 +2292,14 @@ class PhotoSphereMainWindow(QMainWindow):
         help_menu = menubar.addMenu("Help")
         
         documentation_action = QAction("Documentation", self)
+        documentation_action.setShortcut(QKeySequence("Ctrl+D"))
         documentation_action.triggered.connect(self.open_documentation)
         help_menu.addAction(documentation_action)
         
         help_menu.addSeparator()
         
         about_action = QAction("About", self)
+        about_action.setShortcut(QKeySequence("Ctrl+A"))
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
     
