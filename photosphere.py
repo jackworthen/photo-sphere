@@ -710,7 +710,7 @@ class TagManagementDialog(QDialog):
         
         self.tags_table = QTableWidget()
         self.tags_table.setColumnCount(3)
-        self.tags_table.setHorizontalHeaderLabels(["Name", "Photo Count", "Delete"])
+        self.tags_table.setHorizontalHeaderLabels(["Name", "Count", "Action"])
         self.tags_table.horizontalHeader().setStretchLastSection(True)
         self.tags_table.verticalHeader().hide()
         existing_layout.addWidget(self.tags_table)
@@ -725,7 +725,7 @@ class TagManagementDialog(QDialog):
         button_layout.addWidget(close_button)
         layout.addLayout(button_layout)
         
-        self.resize(600, 400)
+        self.resize(365, 500)
     
     def create_tag(self):
         """Create a new tag."""
