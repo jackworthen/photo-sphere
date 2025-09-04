@@ -1,19 +1,25 @@
 # PhotoSphere
 
-A robust desktop application for organizing and cataloging your photography collection with automatic metadata extraction and GPS support.
+A robust desktop application for organizing and cataloging your photography collection with automatic metadata extraction, GPS support, and comprehensive tagging system.
 
 ## 🚀 Features
 
 - **📸 Photo Import**: Import photos with automatic metadata extraction
+- **🏷️ Tag Management**: Create, assign, and filter photos by custom tags
 - **🗃️ Smart Cataloging**: Organize your photo collection in a searchable database
 - **📊 EXIF Data Parsing**: Extract comprehensive camera settings and technical details
 - **🌍 GPS Support**: View location data and open coordinates in Google Maps
 - **🖼️ Image Preview**: High-quality photo preview with proper EXIF orientation handling
+- **🔍 Advanced Filtering**: Filter photos by tags, including untagged photos
+- **📂 Multiple Sorting**: Sort by date, filename, file size, camera, ISO, or dimensions
+- **⚡ Batch Operations**: Assign tags or remove multiple photos at once
 - **🖱️ Drag & Drop**: Easy photo import by dragging files into the application
 - **💾 Cross-Platform Database**: SQLite database with OS-specific storage locations
-- **🔄 Orientation Correction**: Automatic image rotation based on EXIF orientation data
+- **📄 Orientation Correction**: Automatic image rotation based on EXIF orientation data
 - **📱 HEIC Support**: Modern iPhone/iPad HEIC format support with optional dependency
 - **👆 Quick Access**: Double-click photos to open in your default image viewer
+- **💿 Save Copy**: Save copies of photos to custom locations
+- **🚀 Optimized Loading**: Fast startup with lazy thumbnail loading and caching
 
 ## 📋 Requirements
 
@@ -92,6 +98,14 @@ PhotoSphere supports modern HEIC and HEIF image formats used by Apple devices (i
    - Use the File menu → Import Photos
    - Drag and drop image files directly into the application
 
+### Tag Management
+
+- **Create Tags**: Use Tags → Manage Tags or create tags during assignment
+- **Assign Tags**: Right-click photos to assign tags individually or in batches
+- **Filter by Tags**: Use the tag filter dropdown to view photos by specific tags
+- **Untagged Filter**: Quickly find photos without any tags assigned
+- **Batch Operations**: Select multiple photos for batch tag assignment or removal
+
 ### Supported File Formats
 
 **Standard Formats:**
@@ -107,25 +121,24 @@ PhotoSphere supports modern HEIC and HEIF image formats used by Apple devices (i
 
 > **Note:** HEIC/HEIF support requires installing `pillow-heif`. Without it, HEIC files can still be imported but will show placeholder thumbnails.
 
-### Viewing Photo Details
+### Photo Operations
 
-- **Single-click** on any photo in the grid to view its details
-- **Double-click** on any photo to open it in your system's default image viewer
-- Photo details include:
-  - Camera make and model
-  - Lens information
-  - Camera settings (aperture, shutter speed, ISO)
-  - Date taken
-  - File size and dimensions
-  - GPS coordinates (if available)
-  - Google Maps integration for location data
+- **Single-click** to view photo details
+- **Double-click** to open in your system's default image viewer
+- **Right-click** for context menu with options:
+  - Open in Default Viewer
+  - Save Copy to custom location
+  - Assign Tags
+  - Remove from catalog
+- **Multi-select** photos for batch operations
+- **Drag & Drop** new photos to import
 
-### Working with HEIC Files
+### Viewing and Sorting
 
-- **With HEIC support enabled**: Full thumbnails, previews, and metadata extraction
-- **Without HEIC support**: Files are cataloged with placeholder thumbnails and basic metadata
-- **Double-click**: Opens HEIC files in your default viewer regardless of PhotoSphere's HEIC support
-- **Status indicator**: Check the status bar to see if HEIC support is enabled
+- **Sort Options**: Date added/taken, filename, file size, camera, ISO, dimensions
+- **Tag Filtering**: View all photos, untagged photos, or photos with specific tags
+- **Photo Details**: View comprehensive EXIF data, GPS coordinates, and assigned tags
+- **Filename Toggle**: Show or hide filenames below thumbnails
 
 ### Database Management
 
@@ -134,11 +147,12 @@ PhotoSphere supports modern HEIC and HEIF image formats used by Apple devices (i
   - **macOS**: `~/Library/Application Support/PhotoSphere/`
   - **Linux**: `~/.local/share/PhotoSphere/`
 - **Database Info**: Access via File → Database Information
+- **Thumbnail Cleanup**: Remove orphaned thumbnail files
 - **Backup**: The database file `photo_catalog.db` can be backed up from the database directory
 
 ## 🗂️ Database Schema
 
-PhotoSphere uses SQLite with the following structure:
+PhotoSphere uses SQLite with comprehensive photo and tag management:
 
 ```sql
 photos (
@@ -165,6 +179,19 @@ photos (
     gps_location_name TEXT,
     metadata_json TEXT
 )
+
+tags (
+    id INTEGER PRIMARY KEY,
+    name TEXT UNIQUE,
+    color TEXT,
+    created_date TIMESTAMP
+)
+
+photo_tags (
+    photo_id INTEGER,
+    tag_id INTEGER,
+    assigned_date TIMESTAMP
+)
 ```
 
 ## 🔧 Technical Details
@@ -189,43 +216,11 @@ PhotoSphere extracts comprehensive metadata from photos including:
 ### Image Handling
 
 - Proper EXIF orientation handling for correct image display
-- Efficient thumbnail generation for all supported formats
+- Efficient thumbnail generation with caching for fast loading
 - HEIC/HEIF format support with automatic conversion for display
+- Lazy loading system for optimal performance with large collections
 - Graceful handling of corrupted or unsupported files
-- Placeholder generation for unsupported formats
 - Cross-platform file opening in default image viewers
-
-## 📸 Screenshots
-
-*Add screenshots of your application here*
-
-## 🚧 Development
-
-### Project Structure
-
-```
-photo-sphere/
-├── photosphere.py          # Main application file
-├── README.md              # This file
-└── requirements.txt       # Python dependencies (optional)
-```
-
-### requirements.txt (suggested content)
-
-```
-PySide6>=6.0.0
-Pillow>=8.0.0
-exifread>=2.3.0
-pillow-heif>=0.10.0  # Optional: for HEIC/HEIF support
-```
-
-### Key Classes
-
-- `PhotoSphereMainWindow`: Main application window
-- `DatabaseManager`: SQLite database operations
-- `MetadataExtractor`: EXIF and image metadata extraction
-- `ImageUtils`: Image processing and orientation handling
-- `PhotoImportWorker`: Background thread for photo importing
 
 ## 🤝 Contributing
 
@@ -251,18 +246,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - HEIC files require the optional `pillow-heif` library for full support
 - HEIC thumbnail generation may be slower than standard formats
 
-## 🔮 Future Enhancements
-
-- [ ] Batch photo operations
-- [ ] Advanced search and filtering
-- [ ] Photo rating system
-- [ ] Export functionality
-- [ ] Duplicate photo detection
-- [ ] Photo editing integration
-- [ ] Cloud storage integration
-- [ ] RAW format support
-- [ ] Video file support
-
 ## 🔧 Troubleshooting
 
 ### HEIC Files Not Displaying
@@ -276,7 +259,7 @@ If HEIC files show as gray placeholders:
 
 ### Performance Issues
 
-- Large collections: Consider importing photos in smaller batches
+- Large collections: The lazy loading system should handle most cases efficiently
 - Slow HEIC thumbnails: This is normal due to format conversion
 - Memory usage: Restart the application if importing many large files
 
