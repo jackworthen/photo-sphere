@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QCheckBox
 )
 from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer, QPoint
-from PySide6.QtGui import QPixmap, QIcon, QDragEnterEvent, QDropEvent, QAction, QTransform
+from PySide6.QtGui import QPixmap, QIcon, QDragEnterEvent, QDropEvent, QAction, QTransform, QPainter, QColor
 
 from PIL import Image
 from PIL.ExifTags import TAGS
@@ -73,6 +73,43 @@ def get_resource_path(relative_path: str) -> Path:
         base_path = Path(__file__).parent
     
     return base_path / relative_path
+
+
+def create_placeholder_icon(size: QSize = QSize(120, 120)) -> QIcon:
+    """Create a placeholder icon for photos before thumbnails load."""
+    pixmap = QPixmap(size)
+    pixmap.fill(QColor(240, 240, 240))  # Light gray background
+    
+    painter = QPainter(pixmap)
+    painter.setPen(QColor(180, 180, 180))  # Darker gray for border and icon
+    
+    # Draw border
+    painter.drawRect(0, 0, size.width()-1, size.height()-1)
+    
+    # Draw simple image icon in center
+    center_x = size.width() // 2
+    center_y = size.height() // 2
+    icon_size = min(size.width(), size.height()) // 4
+    
+    # Draw simple mountain/image icon
+    painter.drawLine(center_x - icon_size, center_y + icon_size//2, 
+                    center_x - icon_size//2, center_y - icon_size//2)
+    painter.drawLine(center_x - icon_size//2, center_y - icon_size//2, 
+                    center_x, center_y)
+    painter.drawLine(center_x, center_y, 
+                    center_x + icon_size//2, center_y - icon_size//2)
+    painter.drawLine(center_x + icon_size//2, center_y - icon_size//2, 
+                    center_x + icon_size, center_y + icon_size//2)
+    
+    # Draw sun
+    sun_x = center_x + icon_size//3
+    sun_y = center_y - icon_size//3
+    sun_radius = icon_size//6
+    painter.drawEllipse(sun_x - sun_radius, sun_y - sun_radius, 
+                       sun_radius * 2, sun_radius * 2)
+    
+    painter.end()
+    return QIcon(pixmap)
 
 
 class DatabaseManager:
@@ -976,119 +1013,10 @@ class BatchTagAssignmentDialog(QDialog):
                 "Error",
                 f"Failed to apply tag changes: {str(e)}"
             )
-    
+
+
 class TagAssignmentDialog(QDialog):
     """Dialog for assigning tags to a single photo."""
-    
-    def __init__(self, db_manager: DatabaseManager, photo_id: int, photo_name: str, parent=None):
-        super().__init__(parent)
-        self.db_manager = db_manager
-        self.photo_id = photo_id
-        self.setWindowTitle(f"Assign Tags - {photo_name}")
-        self.setModal(True)
-        self.setup_ui()
-        self.load_tags()
-    
-    def setup_ui(self):
-        layout = QVBoxLayout(self)
-        
-        info_label = QLabel("Select tags to assign to this photo:")
-        layout.addWidget(info_label)
-        
-        # Tags list with checkboxes
-        self.tags_widget = QWidget()
-        self.tags_layout = QVBoxLayout(self.tags_widget)
-        
-        scroll_area = QScrollArea()
-        scroll_area.setWidget(self.tags_widget)
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setMaximumHeight(300)
-        layout.addWidget(scroll_area)
-        
-        # Buttons
-        button_layout = QHBoxLayout()
-        
-        create_tag_button = QPushButton("Create New Tag")
-        create_tag_button.clicked.connect(self.create_new_tag)
-        button_layout.addWidget(create_tag_button)
-        
-        button_layout.addStretch()
-        
-        cancel_button = QPushButton("Cancel")
-        cancel_button.clicked.connect(self.reject)
-        button_layout.addWidget(cancel_button)
-        
-        save_button = QPushButton("Save")
-        save_button.clicked.connect(self.save_tags)
-        button_layout.addWidget(save_button)
-        
-        layout.addLayout(button_layout)
-        
-        self.resize(400, 350)
-    
-    def load_tags(self):
-        """Load all tags and show current assignments."""
-        # Clear existing checkboxes
-        for i in reversed(range(self.tags_layout.count())):
-            self.tags_layout.itemAt(i).widget().setParent(None)
-        
-        all_tags = self.db_manager.get_all_tags()
-        photo_tags = self.db_manager.get_photo_tags(self.photo_id)
-        photo_tag_ids = [tag['id'] for tag in photo_tags]
-        
-        self.tag_checkboxes = {}
-        
-        for tag in all_tags:
-            checkbox = QCheckBox(tag['name'])
-            checkbox.setChecked(tag['id'] in photo_tag_ids)
-            
-            self.tag_checkboxes[tag['id']] = checkbox
-            self.tags_layout.addWidget(checkbox)
-        
-        if not all_tags:
-            no_tags_label = QLabel("No tags available. Create some tags first.")
-            no_tags_label.setStyleSheet("color: gray; font-style: italic;")
-            self.tags_layout.addWidget(no_tags_label)
-    
-    def create_new_tag(self):
-        """Open tag creation dialog."""
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Create New Tag")
-        layout = QVBoxLayout(dialog)
-        
-        form_layout = QFormLayout()
-        name_input = QLineEdit()
-        name_input.setPlaceholderText("Enter tag name...")
-        form_layout.addRow("Name:", name_input)
-        layout.addLayout(form_layout)
-        
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-        
-        if dialog.exec() == QDialog.Accepted:
-            name = name_input.text().strip()
-            if name:
-                try:
-                    self.db_manager.create_tag(name)
-                    self.load_tags()  # Refresh the tag list
-                    QMessageBox.information(self, "Success", f"Tag '{name}' created successfully.")
-                except Exception as e:
-                    QMessageBox.warning(self, "Error", f"Failed to create tag: {str(e)}")
-    
-    def save_tags(self):
-        """Save tag assignments."""
-        selected_tag_ids = []
-        for tag_id, checkbox in self.tag_checkboxes.items():
-            if checkbox.isChecked():
-                selected_tag_ids.append(tag_id)
-        
-        if self.db_manager.set_photo_tags(self.photo_id, selected_tag_ids):
-            self.accept()
-        else:
-            QMessageBox.warning(self, "Error", "Failed to save tag assignments.")
-    """Dialog for assigning tags to a photo."""
     
     def __init__(self, db_manager: DatabaseManager, photo_id: int, photo_name: str, parent=None):
         super().__init__(parent)
@@ -1789,7 +1717,9 @@ class PhotoListWidget(QListWidget):
         self.db_manager = db_manager
         self.thumbnail_workers = {}  # Track active thumbnail workers
         self.loaded_thumbnails = set()  # Track which thumbnails have been loaded
-        self.pending_updates = []  # Track pending thumbnail updates
+        
+        # Create a reusable placeholder icon
+        self.placeholder_icon = create_placeholder_icon(QSize(120, 120))
         
         self.setAcceptDrops(True)
         self.setDragDropMode(QAbstractItemView.DropOnly)
@@ -1816,11 +1746,6 @@ class PhotoListWidget(QListWidget):
         self.load_timer = QTimer()
         self.load_timer.setSingleShot(True)
         self.load_timer.timeout.connect(self.load_visible_thumbnails)
-        
-        # Timer for batch thumbnail updates to prevent layout issues
-        self.update_timer = QTimer()
-        self.update_timer.setSingleShot(True)
-        self.update_timer.timeout.connect(self.process_pending_updates)
     
     def on_scroll_changed(self):
         """Handle scroll changes with delayed loading."""
@@ -1899,47 +1824,17 @@ class PhotoListWidget(QListWidget):
         worker.start()
     
     def on_thumbnail_ready(self, photo_id: int, pixmap: QPixmap):
-        """Handle successful thumbnail generation with batch updates."""
+        """Handle successful thumbnail generation - immediate update."""
         self.loaded_thumbnails.add(photo_id)
         
-        # Add to pending updates instead of updating immediately
-        self.pending_updates.append((photo_id, pixmap))
-        
-        # Start or restart the update timer to batch updates
-        self.update_timer.stop()
-        self.update_timer.start(50)  # 50ms delay to batch multiple updates
-    
-    def process_pending_updates(self):
-        """Process all pending thumbnail updates in batch."""
-        if not self.pending_updates:
-            return
-        
-        # Temporarily disable updates to prevent flicker
-        self.setUpdatesEnabled(False)
-        
-        try:
-            # Process all pending updates
-            for photo_id, pixmap in self.pending_updates:
-                # Find the item with this photo_id and set its icon
-                for i in range(self.count()):
-                    item = self.item(i)
-                    if item:
-                        photo_data = item.data(Qt.UserRole)
-                        if photo_data and photo_data.get('id') == photo_id:
-                            item.setIcon(QIcon(pixmap))
-                            break
-            
-            # Clear pending updates
-            self.pending_updates.clear()
-            
-            # Force a complete layout recalculation
-            self.doItemsLayout()
-            
-        finally:
-            # Re-enable updates
-            self.setUpdatesEnabled(True)
-            # Force a repaint
-            self.viewport().update()
+        # Find the item with this photo_id and set its icon immediately
+        for i in range(self.count()):
+            item = self.item(i)
+            if item:
+                photo_data = item.data(Qt.UserRole)
+                if photo_data and photo_data.get('id') == photo_id:
+                    item.setIcon(QIcon(pixmap))
+                    break
     
     def on_thumbnail_failed(self, photo_id: int, error_message: str):
         """Handle thumbnail generation failure."""
@@ -1961,8 +1856,6 @@ class PhotoListWidget(QListWidget):
             worker.wait()
         self.thumbnail_workers.clear()
         self.loaded_thumbnails.clear()
-        self.pending_updates.clear()
-        self.update_timer.stop()
     
     def show_context_menu(self, position: QPoint):
         """Show context menu for photo operations."""
@@ -2534,8 +2427,8 @@ class PhotoSphereMainWindow(QMainWindow):
                     item.setText("")  # Empty text when filenames are hidden
                 item.setData(Qt.UserRole, photo)
                 
-                # Don't set any placeholder icon - let thumbnails appear as they load
-                # This should prevent layout conflicts
+                # Set placeholder icon immediately to maintain layout stability
+                item.setIcon(self.photo_list.placeholder_icon)
                 
                 self.photo_list.addItem(item)
             
