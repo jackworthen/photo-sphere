@@ -683,6 +683,8 @@ class TagManagementDialog(QDialog):
         self.db_manager = db_manager
         self.setWindowTitle("Manage Tags")
         self.setModal(True)
+        self.editing_row = -1  # Track which row is being edited
+        self.original_name = ""  # Store original name for comparison
         self.setup_ui()
         self.load_tags()
     
@@ -713,19 +715,133 @@ class TagManagementDialog(QDialog):
         self.tags_table.setHorizontalHeaderLabels(["Name", "Count", "Action"])
         self.tags_table.horizontalHeader().setStretchLastSection(True)
         self.tags_table.verticalHeader().hide()
+        self.tags_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tags_table.selectionModel().selectionChanged.connect(self.on_selection_changed)
+        self.tags_table.itemChanged.connect(self.on_item_changed)
         existing_layout.addWidget(self.tags_table)
         
         layout.addWidget(existing_tags_group)
         
-        # Close button
+        # Button layout
         button_layout = QHBoxLayout()
+        
+        # Edit button (disabled by default)
+        self.edit_button = QPushButton("Edit")
+        self.edit_button.setEnabled(False)
+        self.edit_button.clicked.connect(self.edit_selected_tag)
+        button_layout.addWidget(self.edit_button)
+        
+        # Save button (disabled by default)
+        self.save_button = QPushButton("Save")
+        self.save_button.setEnabled(False)
+        self.save_button.clicked.connect(self.save_tag_changes)
+        button_layout.addWidget(self.save_button)
+        
         button_layout.addStretch()
+        
         close_button = QPushButton("Close")
         close_button.clicked.connect(self.accept)
         button_layout.addWidget(close_button)
+        
         layout.addLayout(button_layout)
         
         self.resize(365, 500)
+    
+    def on_selection_changed(self):
+        """Handle selection changes to enable/disable Edit button."""
+        selected_rows = set()
+        for item in self.tags_table.selectedItems():
+            selected_rows.add(item.row())
+        
+        # Enable Edit button only if exactly one row is selected and not currently editing
+        self.edit_button.setEnabled(len(selected_rows) == 1 and self.editing_row == -1)
+    
+    def edit_selected_tag(self):
+        """Enable editing for the selected tag."""
+        selected_rows = set()
+        for item in self.tags_table.selectedItems():
+            selected_rows.add(item.row())
+        
+        if len(selected_rows) == 1:
+            row = list(selected_rows)[0]
+            name_item = self.tags_table.item(row, 0)
+            if name_item:
+                self.editing_row = row
+                self.original_name = name_item.text()
+                
+                # Make the name item editable
+                name_item.setFlags(name_item.flags() | Qt.ItemIsEditable)
+                
+                # Disable Edit button and enable editing mode
+                self.edit_button.setEnabled(False)
+                
+                # Start editing the item
+                self.tags_table.editItem(name_item)
+    
+    def on_item_changed(self, item):
+        """Handle item changes to enable/disable Save button."""
+        if item.column() == 0 and item.row() == self.editing_row:  # Name column being edited
+            # Enable Save button if the name has changed
+            current_name = item.text().strip()
+            self.save_button.setEnabled(current_name != self.original_name and current_name != "")
+    
+    def save_tag_changes(self):
+        """Save the edited tag name."""
+        if self.editing_row >= 0:
+            name_item = self.tags_table.item(self.editing_row, 0)
+            if name_item:
+                new_name = name_item.text().strip()
+                
+                if new_name and new_name != self.original_name:
+                    # Find the tag ID by matching the original name
+                    all_tags = self.db_manager.get_all_tags()
+                    tag = next((t for t in all_tags if t['name'] == self.original_name), None)
+                    
+                    if tag:
+                        try:
+                            # Use existing color or default
+                            existing_color = tag.get('color', '#3498db')
+                            if self.db_manager.update_tag(tag['id'], new_name, existing_color):
+                                QMessageBox.information(self, "Success", f"Tag '{self.original_name}' updated to '{new_name}' successfully.")
+                                self.finish_editing()
+                                self.load_tags()  # Reload to reflect changes
+                            else:
+                                QMessageBox.warning(self, "Error", "Failed to update tag.")
+                                self.cancel_editing()
+                        except Exception as e:
+                            QMessageBox.warning(self, "Error", f"Failed to update tag: {str(e)}")
+                            self.cancel_editing()
+                    else:
+                        QMessageBox.warning(self, "Error", "Tag not found.")
+                        self.cancel_editing()
+                else:
+                    # No changes or empty name, just finish editing
+                    self.cancel_editing()
+    
+    def finish_editing(self):
+        """Finish editing mode successfully."""
+        if self.editing_row >= 0:
+            name_item = self.tags_table.item(self.editing_row, 0)
+            if name_item:
+                # Make the item non-editable again
+                name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+        
+        self.editing_row = -1
+        self.original_name = ""
+        self.save_button.setEnabled(False)
+        self.on_selection_changed()  # Re-evaluate Edit button state
+    
+    def cancel_editing(self):
+        """Cancel editing and restore original name."""
+        if self.editing_row >= 0:
+            name_item = self.tags_table.item(self.editing_row, 0)
+            if name_item:
+                # Restore original name
+                name_item.setText(self.original_name)
+                # Make the item non-editable again
+                name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+        
+        self.finish_editing()
     
     def create_tag(self):
         """Create a new tag."""
@@ -748,67 +864,27 @@ class TagManagementDialog(QDialog):
         self.tags_table.setRowCount(len(tags_with_counts))
         
         for i, tag in enumerate(tags_with_counts):
-            # Name
-            self.tags_table.setItem(i, 0, QTableWidgetItem(tag['name']))
+            # Name - make non-editable by default
+            name_item = QTableWidgetItem(tag['name'])
+            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+            self.tags_table.setItem(i, 0, name_item)
             
-            # Photo Count
+            # Photo Count - make non-editable
             count_item = QTableWidgetItem(str(tag['photo_count']))
             count_item.setTextAlignment(Qt.AlignCenter)
+            count_item.setFlags(count_item.flags() & ~Qt.ItemIsEditable)  # Remove editable flag
             self.tags_table.setItem(i, 1, count_item)
             
             # Delete button
             delete_button = QPushButton("Delete")
             delete_button.clicked.connect(lambda checked, tag_id=tag['id'], tag_name=tag['name']: self.delete_tag(tag_id, tag_name))
             self.tags_table.setCellWidget(i, 2, delete_button)
-    
-    def on_item_double_clicked(self, item: QTableWidgetItem):
-        """Handle double-click on table items to edit tag names."""
-        # Only allow editing if the double-clicked item is in the Name column (column 0)
-        if item.column() == 0:
-            row = item.row()
-            # Get the tag ID from the table data
-            # We need to find the tag by matching the name since we don't store the ID in the item
-            tag_name = item.text()
-            
-            # Find the tag in our database
-            all_tags = self.db_manager.get_all_tags()
-            tag = next((t for t in all_tags if t['name'] == tag_name), None)
-            if tag:
-                self.edit_tag(tag['id'])
-    
-    def edit_tag(self, tag_id: int):
-        """Edit an existing tag."""
-        # Find the tag in the current list
-        tags = self.db_manager.get_all_tags()
-        tag = next((t for t in tags if t['id'] == tag_id), None)
-        if not tag:
-            return
         
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Edit Tag")
-        layout = QVBoxLayout(dialog)
-        
-        form_layout = QFormLayout()
-        name_input = QLineEdit(tag['name'])
-        form_layout.addRow("Name:", name_input)
-        layout.addLayout(form_layout)
-        
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-        
-        if dialog.exec() == QDialog.Accepted:
-            new_name = name_input.text().strip()
-            if new_name:
-                try:
-                    # Use existing color or default
-                    existing_color = tag.get('color', '#3498db')
-                    self.db_manager.update_tag(tag_id, new_name, existing_color)
-                    self.load_tags()
-                    QMessageBox.information(self, "Success", f"Tag updated successfully.")
-                except Exception as e:
-                    QMessageBox.warning(self, "Error", f"Failed to update tag: {str(e)}")
+        # Reset editing state
+        self.editing_row = -1
+        self.original_name = ""
+        self.save_button.setEnabled(False)
+        self.on_selection_changed()
     
     def delete_tag(self, tag_id: int, tag_name: str):
         """Delete a tag."""
