@@ -2273,7 +2273,7 @@ class PhotoSphereMainWindow(QMainWindow):
         # Edit menu
         edit_menu = menubar.addMenu("Edit")
         
-        self.show_filenames_action = QAction("Show Filename with Thumbnail", self)
+        self.show_filenames_action = QAction("Show Filenames", self)
         self.show_filenames_action.setCheckable(True)
         self.show_filenames_action.setChecked(self.show_filenames)
         self.show_filenames_action.setShortcut(QKeySequence("Ctrl+F"))
