@@ -2002,7 +2002,7 @@ class DatabaseInfoDialog(QDialog):
         data = [
             ("Database File", Path(info['path']).name),
             ("Directory", info['directory']),
-            ("Full Path", info['path']),
+            #("Full Path", info['path']),
             ("Database Size", info['size']),
             ("Thumbnail Cache Size", info.get('thumbnail_cache_size', 'Unknown')),
             ("Cached Thumbnails", info.get('thumbnail_count', '0'))
@@ -2235,7 +2235,15 @@ class PhotoSphereMainWindow(QMainWindow):
         self.details_table = QTableWidget()
         self.details_table.setColumnCount(2)
         self.details_table.setHorizontalHeaderLabels(["Property", "Value"])
-        self.details_table.horizontalHeader().setStretchLastSection(True)
+        
+        # Left align the column headers
+        header = self.details_table.horizontalHeader()
+        header.setDefaultAlignment(Qt.AlignLeft)
+        header.setStretchLastSection(True)
+        
+        # Set Property column width (expand by 20 from default)
+        self.details_table.setColumnWidth(0, 140)  # Default ~120 + 20
+        
         self.details_table.verticalHeader().hide()
         self.details_table.setEditTriggers(QAbstractItemView.NoEditTriggers)  # Prevent editing
         self.details_table.setSelectionBehavior(QAbstractItemView.SelectRows)  # Select entire rows
